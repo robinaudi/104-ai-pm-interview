@@ -3,39 +3,45 @@
 
 A professional Job Vacancy Assessment System integrated with Google Gemini AI for intelligent resume analysis, candidate scoring, and recruitment pipeline management.
 
-**Repository:** [https://github.com/robinhsu-lab/104-ai-pm-interview](https://github.com/robinhsu-lab/104-ai-pm-interview)
+## 🔙 如何回到此開發專案 (AI Studio / Project IDX)
 
-## 🚀 Quick Start (Git Sync)
+此專案目前運行於 Google 的雲端開發環境。若您關閉了視窗，請透過以下方式回到此專案繼續開發：
 
-To bind your local project to the GitHub repository and sync the code:
+1.  **直接存取 Dashboard**:
+    *   前往 [Google AI Studio](https://aistudio.google.com/) 或 [Project IDX](https://idx.google.com/) 的儀表板。
+    *   在專案列表中點擊您的 Workspace 名稱 (通常預設為 `104-ai-pm-interview` 或您建立時的名稱)。
+
+2.  **瀏覽器書籤**:
+    *   建議您現在直接將**目前的瀏覽器網址**加入書籤，這是最快回來的路徑。
+
+---
+
+## 🔄 GitHub 同步 (版本控制與備份)
+
+此開發環境的程式碼會同步到 GitHub 進行備份與版本控制。
+
+**遠端倉庫 (Remote Repo):** [https://github.com/robinhsu-lab/104-ai-pm-interview](https://github.com/robinhsu-lab/104-ai-pm-interview)
+
+若您在 AI Studio 完成了修改，請在終端機 (Terminal) 執行以下指令將進度推送到 GitHub：
 
 ```bash
-# 1. Initialize Git (if not already done)
-git init
-
-# 2. Add the remote repository
-git remote add origin https://github.com/robinhsu-lab/104-ai-pm-interview.git
-
-# 3. Rename branch to main
-git branch -M main
-
-# 4. Add all files
+# 1. 加入所有修改檔案
 git add .
 
-# 5. Commit
-git commit -m "Initial commit: Complete HR AI Architecture"
+# 2. 提交修改說明 (Commit)
+git commit -m "Update: 說明您這次修改了什麼功能"
 
-# 6. Push to GitHub
-git push -u origin main
+# 3. 推送到 GitHub
+git push origin main
 ```
 
 ---
 
-## 🏗 Project Architecture
+## 🏗 專案架構 (Project Architecture)
 
-This project is built as a **Single Page Application (SPA)** using React and TypeScript, designed for high performance and strict type safety. It leverages a serverless architecture with Supabase for data persistence and Google Gemini for AI logic.
+本專案採用 **Single Page Application (SPA)** 架構，結合 React, TypeScript 與 Google Gemini AI。
 
-### Tech Stack
+### 技術堆疊 (Tech Stack)
 
 *   **Frontend Framework**: React 18 + Vite
 *   **Language**: TypeScript
@@ -44,87 +50,62 @@ This project is built as a **Single Page Application (SPA)** using React and Typ
 *   **Database & Auth**: Supabase (PostgreSQL + RLS)
 *   **PDF Processing**: `pdfjs-dist` (Client-side parsing & rendering)
 *   **Visualization**: Recharts (Radar, Bar, Pie charts)
-*   **Icons**: Lucide React
 
-### 📂 File Structure
+### 📂 檔案結構說明
 
 ```text
 /
-├── index.html              # Entry HTML
-├── index.tsx               # Application Entry Point (React Root)
-├── App.tsx                 # Main Application Layout & Global State
-├── types.ts                # TypeScript Interfaces (Domain Models)
-├── constants.ts            # App Constants & Mock Data
-├── metadata.json           # Application Metadata
-├── vite.config.ts          # Vite Configuration
-├── tailwind.config.js      # Tailwind Configuration (implicit via CDN in index.html)
+├── index.html              # 網站入口 HTML
+├── index.tsx               # 程式進入點 (React Root)
+├── App.tsx                 # 主程式佈局與狀態管理
+├── types.ts                # TypeScript 型別定義 (Domain Models)
+├── constants.ts            # 全域常數與 Mock Data
+├── metadata.json           # 應用程式 Metadata
+├── vite.config.ts          # Vite 建置設定
 │
-├── components/             # UI Components
-│   ├── AccessControlModal.tsx  # Admin: RBAC, Whitelist, Logs, JD Management
-│   ├── AIChat.tsx              # Floating AI Assistant Chatbot
-│   ├── CandidateDetail.tsx     # Candidate Profile, Analysis, & History
-│   ├── CandidateTable.tsx      # Main List View with Filters
-│   ├── ConfigModal.tsx         # Database Connection Settings
-│   ├── DashboardStats.tsx      # Analytics Dashboard (Charts)
-│   ├── ImportModal.tsx         # PDF Upload, Preview, & Analysis Trigger
-│   ├── LoginPage.tsx           # Authentication Screen
-│   └── PermissionGuard.tsx     # RBAC Component Wrapper
+├── components/             # UI 元件庫
+│   ├── AccessControlModal.tsx  # 管理員後台：權限、白名單、Logs、JD 管理
+│   ├── AIChat.tsx              # 懸浮 AI 助理視窗
+│   ├── CandidateDetail.tsx     # 候選人詳情、雷達圖、歷史版本
+│   ├── CandidateTable.tsx      # 主要列表視圖 (含篩選功能)
+│   ├── DashboardStats.tsx      # 數據儀表板 (KPIs & Charts)
+│   ├── ImportModal.tsx         # PDF 上傳、預覽與 AI 分析觸發
+│   ├── LoginPage.tsx           # 登入頁面
+│   └── PermissionGuard.tsx     # 權限控管元件 (HOC)
 │
 ├── contexts/               # React Contexts
-│   └── LanguageContext.tsx     # i18n (English/Traditional Chinese)
+│   └── LanguageContext.tsx     # 多語系支援 (中/英)
 │
-└── services/               # Logic & API Layers
-    ├── geminiService.ts        # AI Logic: Prompts, Resume Analysis, Re-scoring
-    ├── logService.ts           # Audit Logging System
-    ├── pdfService.ts           # PDF Parsing, Thumbnail & Image Extraction
-    └── supabaseService.ts      # Database CRUD, Auth, Access Control
+└── services/               # 邏輯與 API 層
+    ├── geminiService.ts        # AI 核心：Prompt Engineering、履歷分析、評分邏輯
+    ├── logService.ts           # 系統操作記錄 (Audit Logs)
+    ├── pdfService.ts           # PDF 解析、縮圖渲染、圖片擷取
+    └── supabaseService.ts      # 資料庫 CRUD、Auth、RBAC 權限
 ```
 
-## 🧠 Key Logic & Features
+## 🧠 核心邏輯與功能特點
 
-### 1. Intelligent Resume Analysis (`geminiService.ts`)
-*   **Dual-Pass Parsing**: Converts PDF content to text, then uses Gemini to extract structured JSON data.
-*   **Robin Hsu Scoring Standard**: Implements a strict, prompt-engineered scoring logic:
-    *   **Experience Ceiling**: Caps scores based on years of experience (e.g., Juniors capped at 2.9/10).
-    *   **Industry Penalty**: Apply discount multipliers for candidates from bureaucratic industries (Banks, Gov, Telecom).
-*   **Smart LinkedIn Discovery**: Uses Gemini Tools (`googleSearch`) to find LinkedIn profiles if missing from the resume.
+### 1. 智慧履歷分析 (`geminiService.ts`)
+*   **雙重解析 (Dual-Pass)**: 將 PDF 轉為文字後，利用 Gemini 提取結構化 JSON 資料。
+*   **Robin Hsu 評分標準**: 內建嚴格的 Prompt Engineering 邏輯：
+    *   **經驗天花板**: 依據年資設定評分上限 (例如 Junior 上限 2.9/10)。
+    *   **產業懲罰**: 針對傳統產業 (銀行、公部門) 背景候選人進行分數校正，反映其對 SaaS 節奏的適應風險。
+*   **智慧 LinkedIn 搜尋**: 若履歷無連結，自動使用 Gemini Tools (`googleSearch`) 搜尋候選人 LinkedIn。
 
-### 2. PDF Processing Engine (`pdfService.ts`)
-*   **WYSIWYG Preview**: Renders the first page of the PDF to an HTML Canvas/Image for immediate visual verification.
-*   **Profile Photo Extraction**: parses PDF operator lists to find and extract the largest image (likely the profile photo).
-*   **Client-Side Only**: All PDF processing happens in the browser for privacy and speed.
+### 2. PDF 處理引擎 (`pdfService.ts`)
+*   **即時預覽**: 將 PDF 首頁渲染為圖片，提供視覺化確認。
+*   **大頭照擷取**: 解析 PDF 物件層，自動抓取最大圖片作為候選人頭像。
+*   **純前端處理**: 所有 PDF 解析皆在瀏覽器完成，保護隱私且速度快。
 
-### 3. Data Persistence & RBAC (`supabaseService.ts`)
-*   **Hybrid Storage**: Supports "Demo Mode" (Local State) and "Production Mode" (Supabase).
-*   **Custom RBAC**:
-    *   `access_control`: Whitelists users by Email or Domain.
-    *   `app_roles`: Defines permissions (`VIEW_DASHBOARD`, `MANAGE_ACCESS`, etc.).
-    *   **Secure Access**: Policies ensure users only see what they are permitted to.
+### 3. 資料持久化與權限 (`supabaseService.ts`)
+*   **混合儲存模式**: 支援「演示模式 (Demo Mode)」與「正式模式 (Supabase)」。
+*   **RBAC 權限控管**:
+    *   `access_control`: 透過 Email 或 Domain 白名單控制存取。
+    *   `app_roles`: 定義角色權限 (`VIEW_DASHBOARD`, `MANAGE_ACCESS` 等)。
 
-### 4. Candidate Version Control
-*   **History Tracking**: When a candidate re-applies or is re-uploaded, the system archives the old analysis and creates a new version entry.
-*   **Soft Deletion**: Candidates are marked `is_deleted` rather than physically removed to preserve audit trails.
-
-## 🛠 Database Schema (Supabase)
-
-The system uses the following PostgreSQL tables:
-
-1.  **`candidates`**: Core candidate data, JSONB for analysis results and version history.
-2.  **`job_descriptions`**: Stores JDs used for contextual AI scoring.
-3.  **`app_roles`**: Defines role names and permission arrays.
-4.  **`access_control`**: Maps Emails/Domains to Roles.
-5.  **`action_logs`**: Stores audit logs for all critical actions (View, Edit, Delete).
-6.  **`candidate_views`**: Tracks who viewed which candidate (read receipts).
-
-## 🔧 Environment Variables
-
-While the app supports runtime configuration via `ConfigModal`, you can set these for build-time defaults:
-
-```env
-VITE_SUPABASE_URL=your_supabase_url
-VITE_SUPABASE_KEY=your_supabase_anon_key
-API_KEY=your_gemini_api_key
-```
+### 4. 候選人版本控制
+*   **歷史追蹤**: 當候選人重複投遞或被重新上傳時，系統會自動封存舊版分析，建立新版本。
+*   **軟刪除 (Soft Delete)**: 刪除操作僅標記 `is_deleted`，保留稽核軌跡。
 
 ---
 *Generated by AI Assistant for Robin Hsu Lab*
