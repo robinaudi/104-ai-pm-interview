@@ -1,8 +1,7 @@
 
+import { Candidate, CandidateStatus, SourceType, User, UserRole, JobDescription, ScoringStandard } from './types';
 
-import { Candidate, CandidateStatus, SourceType, User, UserRole, JobDescription } from './types';
-
-export const APP_VERSION = 'v1.4.0';
+export const APP_VERSION = 'v3.0.0';
 export const APP_NAME = 'HR Recruitment AI';
 
 export const MOCK_USER: User = {
@@ -33,6 +32,7 @@ export const DEFAULT_JOBS: JobDescription[] = [
         id: 'jd-default-1',
         title: '專案經理 (ERP/數位轉型/AI)',
         department: 'Product',
+        priority: 1, // High Priority
         content: DEFAULT_PM_JD_TEXT,
         created_at: new Date().toISOString()
     },
@@ -40,89 +40,200 @@ export const DEFAULT_JOBS: JobDescription[] = [
         id: 'jd-default-2',
         title: 'Frontend Engineer (React)',
         department: 'Engineering',
+        priority: 2, // Lower Priority
         content: 'Requires 3+ years React, TypeScript, Tailwind CSS. Experience with AI integration is a plus.',
         created_at: new Date().toISOString()
+    }
+];
+
+export const DEFAULT_SCORING_STANDARDS: ScoringStandard[] = [
+    // --- V3 SCORING DIMENSIONS (From PDF) ---
+    {
+        id: 'dim-1',
+        category: 'DIMENSION_WEIGHT',
+        condition: 'ERP/Finance Mastery',
+        rule_text: '20', // Weight %
+        description: '0: No Exp. 5: Used ERP. 10: Led Implementation. Keywords: Finance closing, Supply chain, API.',
+        priority: 1,
+        is_active: true
+    },
+    {
+        id: 'dim-2',
+        category: 'DIMENSION_WEIGHT',
+        condition: 'AI & Digital Transformation',
+        rule_text: '25', // Weight %
+        description: '0: Interest only. 5: Used ChatGPT. 10: Successful Agentic AI/LCDP project with ROI.',
+        priority: 2,
+        is_active: true
+    },
+    {
+        id: 'dim-3',
+        category: 'DIMENSION_WEIGHT',
+        condition: 'PM Methodology',
+        rule_text: '15', // Weight %
+        description: '0: Chaos. 5: PMP Cert only. 10: Hybrid Agile experience. Knows when to use Waterfall vs Scrum.',
+        priority: 3,
+        is_active: true
+    },
+    {
+        id: 'dim-4',
+        category: 'DIMENSION_WEIGHT',
+        condition: 'Communication',
+        rule_text: '20', // Weight %
+        description: '0: Solo. 5: Single Dept. 10: Cross-Dept (C-Level/RD/Ops) & Vendor Mgmt.',
+        priority: 4,
+        is_active: true
+    },
+    {
+        id: 'dim-5',
+        category: 'DIMENSION_WEIGHT',
+        condition: 'Industry Relevance',
+        rule_text: '10', // Weight %
+        description: '0: None. 5: Traditional Retail/Soft. 10: SaaS / Ecommerce / OMO Background.',
+        priority: 5,
+        is_active: true
+    },
+    {
+        id: 'dim-6',
+        category: 'DIMENSION_WEIGHT',
+        condition: 'Education & Learning',
+        rule_text: '10', // Weight %
+        description: '0: Irrelevant. 5: Related Bachelor. 10: Master + Recent AI/Cloud Certs.',
+        priority: 6,
+        is_active: true
+    },
+
+    // --- LEGACY / GENERAL RULES ---
+    {
+        id: 'rule-exp-1',
+        category: 'EXPERIENCE_CEILING',
+        condition: '20+ Years',
+        rule_text: 'Score 10.0 : 20+ Years. (VP/Director Level).',
+        priority: 20,
+        is_active: true
+    },
+    {
+        id: 'rule-exp-2',
+        category: 'EXPERIENCE_CEILING',
+        condition: '10-15 Years',
+        rule_text: 'Score 8.0 - 9.9 : 10-15 Years. (Dept Manager Level).',
+        priority: 21,
+        is_active: true
+    },
+    {
+        id: 'rule-exp-3',
+        category: 'EXPERIENCE_CEILING',
+        condition: '6-10 Years',
+        rule_text: 'Score 6.0 - 7.9 : 6-10 Years. HARD MAX 7.9 for <10 yrs.',
+        priority: 22,
+        is_active: true
+    },
+    {
+        id: 'rule-exp-4',
+        category: 'EXPERIENCE_CEILING',
+        condition: '3-5 Years',
+        rule_text: 'Score 3.0 - 5.9 : 3-5 Years. (Mid-level).',
+        priority: 23,
+        is_active: true
+    },
+    {
+        id: 'rule-exp-5',
+        category: 'EXPERIENCE_CEILING',
+        condition: '0-2 Years',
+        rule_text: 'Score 1.0 - 2.9 : 0-2 Years. (Junior).',
+        priority: 24,
+        is_active: true
+    },
+    {
+        id: 'rule-ind-1',
+        category: 'INDUSTRY_PENALTY',
+        condition: 'Traditional Sectors',
+        rule_text: '{"competency": 0.7, "culture": 0.6}', // JSON Format
+        priority: 30,
+        is_active: true
     }
 ];
 
 export const MOCK_CANDIDATES: Candidate[] = [
   {
     id: 'c-1',
-    name: '陳雅婷',
-    email: 'alice.chen@example.com',
+    name: '鍾佩婷',
+    email: 'beiting0228@gmail.com',
     roleApplied: '專案經理 (ERP/數位轉型/AI)', 
     source: SourceType.LINKEDIN,
     status: CandidateStatus.INTERVIEW,
+    isUnsolicited: false,
     uploadedBy: 'robinhsu@91app.com',
-    viewedBy: ['robinhsu@91app.com'], // Demo: Already viewed by Robin
+    viewedBy: ['robinhsu@91app.com'], 
     createdAt: '2024-05-10T09:00:00Z',
     updatedAt: '2024-05-12T10:30:00Z',
     analysis: {
+      modelVersion: 'v3.0',
       extractedData: {
-        name: '陳雅婷',
-        englishName: 'Alice Chen',
-        email: 'alice.chen@example.com',
-        currentPosition: '資深技術專案經理',
+        name: '鍾佩婷',
+        englishName: 'Becky',
+        email: 'beiting0228@gmail.com',
+        currentPosition: 'Digital Business Process Analyst',
         yearsOfExperience: 6, 
         relevantYearsOfExperience: 5,
         detectedSource: 'LinkedIn',
+        isUnsolicited: false,
         personalInfo: {
-            mobile: '0912-345-678',
-            gender: 'Female',
-            age: '32',
-            address: 'Taipei City',
+            mobile: '0962-061-728',
+            gender: '女',
+            age: '28',
+            address: '台北市信義區虎林街***',
             highestEducation: 'Master',
-            school: 'National Taiwan University',
-            major: 'Business Administration',
+            school: '國立政治大學',
+            major: '資訊管理學系 (大學畢業)',
             marriage: 'Single'
         },
-        skills: ['Project Management', 'Agile', 'Scrum', 'Stakeholder Management', 'JIRA', 'SQL Basic'],
-        otherSkills: ['Word', 'Excel', 'PowerPoint', 'Communication', 'Leadership', 'Driver License'],
-        autobiography: '擁有超過 6 年的專案管理經驗，專注於軟體開發與跨部門協作。曾在跨國公司帶領團隊成功交付多個大型專案。善於溝通協調，能夠在壓力下保持冷靜並解決問題。',
-        certifications: ['PMP', 'CSM', 'Google Project Management'],
-        portfolio: [
-            { name: 'LinkedIn Profile', url: 'https://linkedin.com/in/alicechen' },
-            { name: 'Personal Blog', url: 'https://alice-pm-thoughts.com' }
-        ],
+        skills: ['MySQL', 'CRM', '敏捷專案管理', '系統分析', '系統管理', 'Python', 'Java', 'Agile/Scrum'],
+        otherSkills: ['Word', 'Excel', 'PowerPoint'],
+        autobiography: '...',
+        certifications: [],
+        portfolio: [],
         workExperience: [
             {
-                company: 'Global SaaS Inc.',
-                title: 'Senior Technical PM',
-                duration: '2021 - Present',
-                description: '領導 15 人跨國團隊，成功交付企業級 CRM 系統。導入 Agile 流程，提升交付效率 30%。',
+                company: '趨勢科技股份有限公司',
+                title: '企業流程分析師 (Digital Business Process Analyst)',
+                duration: '2020/12 - 仍在職',
+                description: '主導 Salesforce 至 Microsoft Dynamics 的大型 CRM 遷移專案...',
                 isRelevant: true
-            },
-            {
-                company: 'TechStart Solutions',
-                title: 'Project Manager',
-                duration: '2018 - 2021',
-                description: '負責金融科技 App 開發專案，協調行銷與工程團隊。管理預算超過 500 萬台幣。',
-                isRelevant: true
-            },
-            {
-                company: 'Starbucks TW',
-                title: 'Store Manager',
-                duration: '2016 - 2018',
-                description: '負責門市營運管理、人員排班與庫存控管。',
-                isRelevant: false
             }
         ]
       },
-      summary: '擁有 6 年 SaaS 產品交付經驗的資深專案經理。具備 PMP 證照，擅長跨部門溝通與時程控管。',
-      matchScore: 85,
+      summary: '具備大外商 CRM 遷移經驗的流程分析師，但缺乏 ERP 財務循環實戰經驗。',
+      matchScore: 6.8, 
       gapAnalysis: {
-          pros: ['PMP 認證符合資格', '豐富的 SaaS 管理經驗', '跨部門溝通能力強'],
-          cons: ['履歷中未提及 AI 工具導入經驗', 'ERP 相關經驗較少提及']
+          pros: ['具備大型 CRM 遷移經驗', '頂尖科技業背景', '數據分析能力'],
+          cons: ['缺乏 ERP 財務循環經驗', '非純 PM 出身', 'AI 實戰經驗較少']
       },
-      fiveForces: { competency: 8, experience: 9, cultureFit: 8, potential: 7, communication: 9 },
+      // V3 Structure
+      scoringDimensions: {
+          'ERP/Finance Mastery': 6.0,
+          'AI & Digital Transformation': 5.0,
+          'PM Methodology': 7.0,
+          'Communication': 8.0,
+          'Industry Relevance': 7.0,
+          'Education & Learning': 8.0
+      },
+      // Keep legacy for safety
+      fiveForces: { 
+          skillsMatch: 6.0, 
+          experience: 7.0, 
+          cultureFit: 8.0, 
+          potential: 8.5, 
+          communication: 8.0 
+      },
       swot: {
-        strengths: ['PMP 國際專案管理師認證', '卓越的利害關係人管理能力', '熟悉 Agile/Scrum 開發流程'],
-        weaknesses: ['技術背景較淺，無法進行程式碼審查', '有時過於依賴既定流程'],
-        opportunities: ['非常適合負責新的企業級客戶導入專案'],
-        threats: ['薪資期望可能略高於部門預算']
+        strengths: ['跨國 CRM 系統導入經驗', '溝通協調能力強'],
+        weaknesses: ['不熟悉財務 ERP 模組'],
+        opportunities: ['可培養為 CRM 專案 PM'],
+        threats: ['對財務流程理解不足']
       },
-      hrAdvice: '陳雅婷是面對客戶型 PM 的強力人選。建議在面試中驗證其對 JIRA 進階管理功能的熟悉度。',
-      interviewQuestions: ['請描述一次您成功處理專案範圍發散 (Scope Creep) 的經驗。', '當不同部門的利害關係人需求衝突時，您如何解決？']
+      hrAdvice: '建議錄取為 CRM 相關專案 PM。',
+      interviewQuestions: ['請說明您在 CRM 遷移專案中，如何處理跨部門的需求衝突？']
     }
   }
 ];

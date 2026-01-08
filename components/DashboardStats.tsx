@@ -1,4 +1,3 @@
-
 import React, { useMemo } from 'react';
 import { Candidate, CandidateStatus } from '../types';
 import { 
@@ -13,7 +12,7 @@ interface DashboardStatsProps {
   onFilterClick: (type: 'source' | 'role' | 'topTalent', value: string | boolean) => void;
 }
 
-const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#6366f1', '#8b5cf6'];
+const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#6366f1', '#8b5cf6', '#0ea5e9', '#d946ef'];
 
 const DashboardStats: React.FC<DashboardStatsProps> = ({ candidates, onFilterClick }) => {
   const { t } = useLanguage();
@@ -28,31 +27,60 @@ const DashboardStats: React.FC<DashboardStatsProps> = ({ candidates, onFilterCli
   const totalScore = candidates.reduce((sum, c) => sum + normalize(c.analysis?.matchScore || 0), 0);
   const avgScore = total > 0 ? (totalScore / total).toFixed(1) : '0';
 
-  // 3. Culture Fit
-  const totalCulture = candidates.reduce((sum, c) => sum + normalize(c.analysis?.fiveForces?.cultureFit || 0), 0);
+  // 3. Culture Fit (Legacy & V3 handling)
+  const totalCulture = candidates.reduce((sum, c) => {
+      // Try V3 Dimension first if it exists roughly matching
+      let val = c.analysis?.scoringDimensions?.['Culture Fit'] ?? c.analysis?.scoringDimensions?.['Culture'] ?? c.analysis?.fiveForces?.cultureFit ?? 0;
+      return sum + normalize(val);
+  }, 0);
   const avgCulture = total > 0 ? (totalCulture / total).toFixed(1) : '0';
 
   // 4. Pending Action
   const pendingCount = candidates.filter(c => c.status === CandidateStatus.NEW || c.status === CandidateStatus.SCREENING).length;
 
-  // Radar Data
+  // Radar Data (Aggregated)
   const radarData = useMemo(() => {
     if (total === 0) return [];
     
+    // Check if we have mostly V3 candidates
+    const v3Count = candidates.filter(c => c.analysis?.scoringDimensions).length;
+    
+    if (v3Count > 0) {
+        // Dynamic aggregation for V3
+        const dimSums: Record<string, number> = {};
+        let countWithDims = 0;
+        
+        candidates.forEach(c => {
+            if (c.analysis?.scoringDimensions) {
+                Object.entries(c.analysis.scoringDimensions).forEach(([key, val]) => {
+                    dimSums[key] = (dimSums[key] || 0) + normalize(val as number);
+                });
+                countWithDims++;
+            }
+        });
+
+        return Object.entries(dimSums).map(([key, sum]) => ({
+            subject: key,
+            A: (sum / countWithDims).toFixed(1),
+            fullMark: 10
+        }));
+    } 
+    
+    // Fallback to Legacy Fixed 5 Forces
     const sums = candidates.reduce((acc, c) => {
         const f = c.analysis?.fiveForces;
         if (!f) return acc;
         return {
-            competency: acc.competency + normalize(f.competency),
+            skillsMatch: acc.skillsMatch + normalize(f.skillsMatch),
             experience: acc.experience + normalize(f.experience),
             cultureFit: acc.cultureFit + normalize(f.cultureFit),
             potential: acc.potential + normalize(f.potential),
             communication: acc.communication + normalize(f.communication),
         };
-    }, { competency: 0, experience: 0, cultureFit: 0, potential: 0, communication: 0 });
+    }, { skillsMatch: 0, experience: 0, cultureFit: 0, potential: 0, communication: 0 });
 
     return [
-        { subject: 'Competency', A: (sums.competency / total).toFixed(1), fullMark: 10 },
+        { subject: 'Skills Match', A: (sums.skillsMatch / total).toFixed(1), fullMark: 10 },
         { subject: 'Experience', A: (sums.experience / total).toFixed(1), fullMark: 10 },
         { subject: 'Culture Fit', A: (sums.cultureFit / total).toFixed(1), fullMark: 10 },
         { subject: 'Potential', A: (sums.potential / total).toFixed(1), fullMark: 10 },
@@ -60,12 +88,26 @@ const DashboardStats: React.FC<DashboardStatsProps> = ({ candidates, onFilterCli
     ];
   }, [candidates, total]);
 
-  // Chart 2: Source Distribution
+  // Chart 2: Source Distribution (NORMALIZED)
   const sourceMap: Record<string, number> = {};
+  
+  const normalizeSource = (rawSource: string) => {
+      const lower = (rawSource || '').toLowerCase().trim();
+      if (lower.includes('104')) return '104 Corp';
+      if (lower.includes('linkedin')) return 'LinkedIn';
+      if (lower.includes('resume') || lower.includes('pdf') || lower.includes('upload') || lower.includes('user')) return 'User Upload';
+      if (lower.includes('teamdoor')) return 'Teamdoor';
+      return rawSource || 'Other';
+  };
+
   candidates.forEach(c => {
-    sourceMap[c.source] = (sourceMap[c.source] || 0) + 1;
+    const normalizedName = normalizeSource(c.source);
+    sourceMap[normalizedName] = (sourceMap[normalizedName] || 0) + 1;
   });
-  const sourceData = Object.entries(sourceMap).map(([name, value]) => ({ name, value }));
+  
+  const sourceData = Object.entries(sourceMap)
+    .map(([name, value]) => ({ name, value }))
+    .sort((a, b) => b.value - a.value);
 
   // Chart 3: Role Distribution
   const roleMap: Record<string, number> = {};
@@ -118,7 +160,7 @@ const DashboardStats: React.FC<DashboardStatsProps> = ({ candidates, onFilterCli
               <ResponsiveContainer width="100%" height="100%">
                 <RadarChart cx="50%" cy="50%" outerRadius="70%" data={radarData}>
                   <PolarGrid stroke="#e2e8f0" />
-                  <PolarAngleAxis dataKey="subject" tick={{ fill: '#64748b', fontSize: 11, fontWeight: 600 }} />
+                  <PolarAngleAxis dataKey="subject" tick={{ fill: '#64748b', fontSize: 10, fontWeight: 600 }} />
                   <PolarRadiusAxis angle={30} domain={[0, 10]} tick={false} axisLine={false} />
                   <Radar name="Pool Avg" dataKey="A" stroke="#3b82f6" strokeWidth={3} fill="#3b82f6" fillOpacity={0.2} />
                   <Tooltip contentStyle={{borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}} />
@@ -152,8 +194,21 @@ const DashboardStats: React.FC<DashboardStatsProps> = ({ candidates, onFilterCli
           <div className="flex-1 w-full">
             <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
-                    <Pie data={sourceData} cx="50%" cy="45%" innerRadius={60} outerRadius={80} paddingAngle={5} dataKey="value" onClick={(data) => { if(data && data.name) onFilterClick('source', data.name); }}>
-                        {sourceData.map((_, i) => <Cell key={`cell-${i}`} fill={COLORS[i % COLORS.length]} />)}
+                    <Pie 
+                      data={sourceData} 
+                      cx="50%" 
+                      cy="45%" 
+                      innerRadius={60} 
+                      outerRadius={80} 
+                      paddingAngle={5} 
+                      dataKey="value" 
+                      onClick={(data) => { 
+                          if(data && data.name) onFilterClick('source', data.name === 'User Upload' ? 'All' : data.name); 
+                      }}
+                    >
+                        {sourceData.map((entry, i) => (
+                            <Cell key={`cell-${i}`} fill={entry.name === '104 Corp' ? '#ff7800' : (entry.name === 'LinkedIn' ? '#0a66c2' : COLORS[i % COLORS.length])} />
+                        ))}
                     </Pie>
                     <Tooltip contentStyle={{borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}} />
                     <Legend verticalAlign="bottom" height={36} iconType="circle" wrapperStyle={{fontSize: '11px'}} />

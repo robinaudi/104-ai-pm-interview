@@ -54,6 +54,9 @@ const App: React.FC = () => {
   const [filterSource, setFilterSource] = useState<string>('All');
   const [filterRole, setFilterRole] = useState<string>('All');
   const [filterTopTalent, setFilterTopTalent] = useState<boolean>(false);
+  
+  // NEW: Active Applicant Filter (Persistent Tab Logic)
+  const [showActiveApplicantsOnly, setShowActiveApplicantsOnly] = useState(false);
 
   // --- INITIAL DATA LOAD ---
   useEffect(() => {
@@ -77,6 +80,9 @@ const App: React.FC = () => {
       setIsDbConnected(false);
       setCandidates(MOCK_CANDIDATES); 
       setJds(DEFAULT_JOBS);
+      // Auto-select Default Project Manager logic in mock mode
+      const defaultRole = DEFAULT_JOBS.sort((a, b) => (a.priority || 99) - (b.priority || 99))[0];
+      if (defaultRole) setFilterRole(defaultRole.title);
       return;
     }
 
@@ -89,7 +95,19 @@ const App: React.FC = () => {
           fetchJobDescriptions()
       ]);
       setCandidates(data); 
-      setJds(jdData.length > 0 ? jdData : DEFAULT_JOBS);
+      
+      const loadedJds = jdData.length > 0 ? jdData : DEFAULT_JOBS;
+      setJds(loadedJds);
+
+      // --- DEFAULT FILTER LOGIC (Project Manager) ---
+      // Sort by priority (1 is highest) and pick the first one
+      if (loadedJds.length > 0) {
+          const sortedJds = [...loadedJds].sort((a, b) => (a.priority || 99) - (b.priority || 99));
+          const primaryRole = sortedJds[0];
+          // Check if we already have a filter set, if 'All' change it to Default
+          setFilterRole(prev => prev === 'All' ? primaryRole.title : prev);
+      }
+
     } catch (err) {
       console.error(err);
       setDbError("Failed to load data.");
@@ -112,8 +130,6 @@ const App: React.FC = () => {
       setBatchProgress(0);
       let successCount = 0;
 
-      // Use the first JD as default if candidate role doesn't match explicitly
-      // Ideally we match by candidate.roleApplied
       const defaultJD = jds.length > 0 ? jds[0] : DEFAULT_JOBS[0];
 
       for (let i = 0; i < candidates.length; i++) {
@@ -121,7 +137,6 @@ const App: React.FC = () => {
           setBatchProgress(Math.round(((i + 1) / candidates.length) * 100));
           
           try {
-              // Find matching JD or fallback
               const matchingJD = jds.find(j => j.title === c.roleApplied) || defaultJD;
               const targetLang = language === 'zh' ? 'Traditional Chinese' : 'English';
               
@@ -157,10 +172,16 @@ const App: React.FC = () => {
     const previousCandidates = [...candidates];
     setCandidates(prev => [newCandidate, ...prev]);
     setIsImportOpen(false);
+    
+    // NOTE: We pass 'newCandidate' directly to toast to ensure object reference is valid
     try {
       await createCandidate(newCandidate);
       if (user) logAction(user, 'IMPORT_CANDIDATE', newCandidate.name, { id: newCandidate.id });
-      setToast({ message: `${newCandidate.name} imported successfully.`, type: 'success', candidate: newCandidate });
+      setToast({ 
+          message: `${newCandidate.name} imported successfully. Click to view.`, 
+          type: 'success', 
+          candidate: newCandidate 
+      });
     } catch (error: any) {
       setCandidates(previousCandidates);
       setToast({ message: "Database Insert Failed.", type: 'error' });
@@ -198,13 +219,13 @@ const App: React.FC = () => {
     } catch (error) {
         console.error(error);
         setToast({ message: "Failed to update candidate database.", type: 'error' });
-        // Revert (simplified: just reload data)
         loadData();
     }
   };
 
   const handleSelectCandidate = (candidate: Candidate) => {
       setSelectedCandidate(candidate);
+      // Mark as read logic
       if (user) {
           const alreadyViewed = candidate.viewedBy?.includes(user.email);
           if (!alreadyViewed) {
@@ -222,25 +243,55 @@ const App: React.FC = () => {
     if (type === 'source') { setFilterSource(value as string); setFilterRole('All'); setFilterTopTalent(false); }
     if (type === 'role') { setFilterRole(value as string); setFilterSource('All'); setFilterTopTalent(false); }
     if (type === 'topTalent') { setFilterTopTalent(true); setFilterSource('All'); setFilterRole('All'); }
+    // Reset Active tab when using dashboard drill-down
+    setShowActiveApplicantsOnly(false);
     setView('candidates');
   };
 
   const resetFilters = () => { setFilterSource('All'); setFilterRole('All'); setFilterTopTalent(false); };
+
+  // Filter Logic including the new "Active Applicant" tab
+  const getFilteredCandidates = () => {
+      let result = candidates;
+      
+      if (showActiveApplicantsOnly) {
+          result = result.filter(c => c.isUnsolicited);
+      }
+      
+      // Other filters apply on top (or we could clear them when switching tabs)
+      // For now, let them coexist
+      return result;
+  };
+
+  const activeApplicantCount = candidates.filter(c => c.isUnsolicited).length;
 
   // 5. Main App
   if (!user) return null; // Should not happen in bypass mode
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col">
+      {/* Toast Notification */}
       {toast && (
           <div 
-            onClick={() => { if (toast.candidate) { handleSelectCandidate(toast.candidate); setToast(null); } }}
-            className={`fixed top-10 left-1/2 transform -translate-x-1/2 z-[100] px-6 py-3 rounded-full shadow-2xl flex items-center gap-3 animate-slide-in-top border transition-transform hover:scale-105 cursor-pointer
-            ${toast.type === 'success' ? 'bg-slate-900 text-white border-slate-700' : 'bg-red-600 text-white border-red-500'}`}
+            onClick={() => { 
+                if (toast.candidate) { 
+                    handleSelectCandidate(toast.candidate); 
+                    setToast(null); 
+                } 
+            }}
+            className={`fixed top-24 left-1/2 transform -translate-x-1/2 z-[100] px-6 py-4 rounded-xl shadow-2xl flex items-center gap-4 animate-slide-in-top border-2 transition-transform hover:scale-105 cursor-pointer backdrop-blur-sm
+            ${toast.type === 'success' ? 'bg-slate-900/95 text-white border-slate-700' : 'bg-red-600/95 text-white border-red-500'}`}
           >
-              {toast.type === 'success' ? <CheckCircle2 className="w-5 h-5 text-emerald-400" /> : <AlertCircle className="w-5 h-5 text-white" />}
-              <span className="font-medium text-sm">{toast.message}</span>
-              <X className="w-4 h-4 ml-2 opacity-70" onClick={(e) => { e.stopPropagation(); setToast(null); }} />
+              <div className={`p-2 rounded-full ${toast.type === 'success' ? 'bg-emerald-500/20' : 'bg-white/20'}`}>
+                {toast.type === 'success' ? <CheckCircle2 className="w-5 h-5 text-emerald-400" /> : <AlertCircle className="w-5 h-5 text-white" />}
+              </div>
+              <div>
+                 <p className="font-bold text-sm">{toast.message}</p>
+                 {toast.candidate && <p className="text-xs opacity-70 mt-0.5 font-mono">Click to open profile</p>}
+              </div>
+              <button className="ml-2 p-1 hover:bg-white/10 rounded-full" onClick={(e) => { e.stopPropagation(); setToast(null); }}>
+                 <X className="w-4 h-4 opacity-70" />
+              </button>
           </div>
       )}
 
@@ -259,8 +310,15 @@ const App: React.FC = () => {
                 </button>
             </PermissionGuard>
             <PermissionGuard user={user} requiredPermission="VIEW_LIST">
-                <button onClick={() => setView('candidates')} className={`flex items-center gap-2 text-sm font-medium transition-colors ${view === 'candidates' ? 'text-blue-400' : 'text-slate-400 hover:text-white'}`}>
+                <button onClick={() => { setView('candidates'); setShowActiveApplicantsOnly(false); }} className={`flex items-center gap-2 text-sm font-medium transition-colors ${view === 'candidates' && !showActiveApplicantsOnly ? 'text-blue-400' : 'text-slate-400 hover:text-white'}`}>
                     <Users className="w-4 h-4" /> {t('candidates')}
+                </button>
+            </PermissionGuard>
+            {/* NEW ACTIVE APPLICANTS TAB */}
+            <PermissionGuard user={user} requiredPermission="VIEW_LIST">
+                <button onClick={() => { setView('candidates'); setShowActiveApplicantsOnly(true); }} className={`flex items-center gap-2 text-sm font-medium transition-colors relative ${showActiveApplicantsOnly ? 'text-indigo-400' : 'text-slate-400 hover:text-white'}`}>
+                    <Zap className="w-4 h-4" /> Active Applicants
+                    {activeApplicantCount > 0 && <span className="absolute -top-1 -right-2 bg-indigo-500 text-white text-[9px] px-1 rounded-full h-4 flex items-center justify-center">{activeApplicantCount}</span>}
                 </button>
             </PermissionGuard>
             <PermissionGuard user={user} requiredPermission="MANAGE_ACCESS">
@@ -284,48 +342,28 @@ const App: React.FC = () => {
                 <div className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold ring-2 ring-slate-800 overflow-hidden">
                   {user.avatarUrl ? <img src={user.avatarUrl} alt="User" /> : user.email[0].toUpperCase()}
                 </div>
-                <div className="flex flex-col">
-                    <span className="text-xs font-bold text-white leading-none">{user.role}</span>
-                    <span className="text-[9px] text-slate-400">Bypass Mode</span>
-                </div>
              </div>
-             <button onClick={handleLogout} className="p-2 hover:bg-slate-800 rounded-full transition-colors text-slate-400 hover:text-red-400" title={t('logout')}>
-               <LogOut className="w-4 h-4" />
-             </button>
           </div>
         </div>
       </header>
 
-      <main className="flex-1 w-full px-6 lg:px-8 py-8">
+      <main className="flex-1 w-full px-6 lg:px-8 py-8 relative">
         <div className="flex justify-between items-end mb-8">
            <div className="flex items-center gap-4">
              <div>
                 <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-3">
-                  {view === 'dashboard' ? t('overview') : t('candidateManagement')}
+                  {showActiveApplicantsOnly ? 'Active Applicants (主動應徵)' : (view === 'dashboard' ? t('overview') : t('candidateManagement'))}
                   <button onClick={loadData} disabled={dataLoading} className="p-2 bg-white border border-slate-200 rounded-full hover:bg-slate-50 hover:text-blue-600 transition-colors shadow-sm">
                     <RefreshCw className={`w-4 h-4 text-slate-400 ${dataLoading ? 'animate-spin text-blue-500' : ''}`} />
                   </button>
                 </h1>
-                <p className="text-slate-500 text-sm mt-1">{view === 'dashboard' ? t('overviewDesc') : t('managementDesc')}</p>
+                <p className="text-slate-500 text-sm mt-1">
+                    {showActiveApplicantsOnly ? 'Candidates who explicitly mentioned "Active Application" in their resume.' : (view === 'dashboard' ? t('overviewDesc') : t('managementDesc'))}
+                </p>
              </div>
            </div>
            
            <div className="flex items-center gap-4">
-              {/* Batch Rescore Button */}
-              <PermissionGuard user={user} requiredPermission="MANAGE_JD">
-                  <button 
-                    onClick={handleBatchRescore} 
-                    disabled={isBatchProcessing}
-                    className="bg-amber-100 hover:bg-amber-200 text-amber-800 border border-amber-200 px-4 py-2 rounded-lg shadow-sm flex items-center gap-2 text-sm font-bold transition-all"
-                  >
-                     {isBatchProcessing ? (
-                         <><Loader2 className="w-4 h-4 animate-spin" /> Processing {batchProgress}%</>
-                     ) : (
-                         <><Zap className="w-4 h-4" /> Re-Score All (Strict)</>
-                     )}
-                  </button>
-              </PermissionGuard>
-
               {dbError && (
                  <span className="text-xs text-red-600 bg-red-50 px-3 py-1.5 rounded-full border border-red-200 flex items-center gap-2 cursor-pointer hover:bg-red-100" onClick={() => setIsConfigOpen(true)}>
                     <AlertCircle className="w-3 h-3" /> {dbError} <span className="underline ml-1">Fix</span>
@@ -347,7 +385,7 @@ const App: React.FC = () => {
         ) : (
           <PermissionGuard user={user} requiredPermission="VIEW_LIST" fallback={<div className="text-center p-10 text-slate-400">Access Denied</div>}>
             <CandidateTable 
-                candidates={candidates} 
+                candidates={showActiveApplicantsOnly ? candidates.filter(c => c.isUnsolicited) : candidates} 
                 onSelect={handleSelectCandidate}
                 onDelete={handleDelete}
                 currentUser={user}
@@ -356,12 +394,14 @@ const App: React.FC = () => {
                 externalFilterTopTalent={filterTopTalent}
                 onFilterSourceChange={(val) => { setFilterSource(val); setFilterTopTalent(false); }} 
                 onFilterRoleChange={(val) => { setFilterRole(val); setFilterTopTalent(false); }}
+                onToggleTopTalent={(val) => setFilterTopTalent(val)}
                 onClearFilters={resetFilters}
             />
           </PermissionGuard>
         )}
       </main>
 
+      {/* DETAILED VIEW MODAL */}
       {selectedCandidate && (
         <CandidateDetail 
           candidate={selectedCandidate} 

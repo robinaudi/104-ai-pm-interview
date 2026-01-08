@@ -1,7 +1,6 @@
-
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Candidate, User, JobDescription, AnalysisResult } from '../types';
-import { X, Brain, Target, Briefcase, Mail, Award, Link as LinkIcon, Building2, Calendar, User as UserIcon, Globe, ExternalLink, Filter, FileText, Phone, MapPin, GraduationCap, Edit2, Camera, Star, Code2, ScrollText, Clock, Linkedin, Quote, ClipboardPaste, Clipboard, ChevronDown, ChevronUp, Save, Check, RefreshCw, Zap, Loader2, Search, Sparkles, History } from 'lucide-react';
+import { X, Brain, Target, Briefcase, Mail, Award, Link as LinkIcon, Building2, Calendar, User as UserIcon, Globe, ExternalLink, Filter, FileText, Phone, MapPin, GraduationCap, Edit2, Camera, Star, Code2, ScrollText, Clock, Linkedin, Quote, ClipboardPaste, Clipboard, ChevronDown, ChevronUp, Save, Check, RefreshCw, Zap, Loader2, Search, Sparkles, History, ArrowRightLeft } from 'lucide-react';
 import { RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer, Radar as RechartsRadar } from 'recharts';
 import { useLanguage } from '../contexts/LanguageContext';
 import { supabase, isSupabaseConfigured, fetchJobDescriptions, updateCandidate } from '../services/supabaseService';
@@ -83,10 +82,23 @@ const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, o
   
   const [isReScoring, setIsReScoring] = useState(false);
   const [availableJobs, setAvailableJobs] = useState<JobDescription[]>([]);
+  
+  // Job Switching State
+  const [selectedJobId, setSelectedJobId] = useState<string>('');
 
   useEffect(() => {
-    fetchJobDescriptions().then(setAvailableJobs);
-  }, []);
+    const loadJobs = async () => {
+        const jobs = await fetchJobDescriptions();
+        setAvailableJobs(jobs);
+        
+        // Find matching job ID based on candidate role title
+        const currentJob = jobs.find(j => j.title === candidate.roleApplied);
+        if (currentJob) {
+            setSelectedJobId(currentJob.id);
+        }
+    };
+    loadJobs();
+  }, [candidate.roleApplied]);
 
   // Compute the displayed analysis based on selected version
   const displayedData = useMemo(() => {
@@ -113,11 +125,55 @@ const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, o
   if (!analysis) return null;
   const { extractedData } = analysis;
   
-  // Normalization for 0-10 Scale Legacy Handling
-  const normalizeScore = (val: number) => (val > 10 ? val / 10 : val);
+  const normalizeScore = (val: number | undefined) => {
+      if (typeof val !== 'number') return 0;
+      return val > 10 ? val / 10 : val;
+  };
+  
   const finalMatchScore = normalizeScore(analysis.matchScore);
 
-  const handleReScore = async () => {
+  const handleRoleChangeAndRescore = async () => {
+      const newJob = availableJobs.find(j => j.id === selectedJobId);
+      if (!newJob) return;
+      if (!confirm(`Confirm change role to "${newJob.title}" and Re-Analyze?\nThis will overwrite the current analysis.`)) return;
+
+      setIsReScoring(true);
+      try {
+          const targetLang = language === 'zh' ? 'Traditional Chinese' : 'English';
+          const newAnalysis = await reEvaluateCandidate(candidate, newJob.content, targetLang);
+          
+          const historyEntry = {
+              date: candidate.updatedAt,
+              roleApplied: candidate.roleApplied,
+              analysis: candidate.analysis!
+          };
+          const newVersions = [...(candidate.versions || []), historyEntry];
+
+          const updatedCandidate = { 
+              ...candidate, 
+              roleApplied: newJob.title, 
+              analysis: newAnalysis, 
+              versions: newVersions,
+              updatedAt: new Date().toISOString()
+          };
+
+          if (onUpdate) onUpdate(updatedCandidate);
+
+          if (isSupabaseConfigured()) {
+              await updateCandidate(updatedCandidate);
+          }
+          alert(`Role updated to ${newJob.title} and re-scored successfully.`);
+          setSelectedVersionDate('latest');
+
+      } catch (e) {
+          console.error("Role switch re-score failed", e);
+          alert("Failed to re-score.");
+      } finally {
+          setIsReScoring(false);
+      }
+  };
+
+  const handleReScoreCurrent = async () => {
     if (selectedVersionDate !== 'latest') {
         alert("You can only re-evaluate the latest version.");
         return;
@@ -151,13 +207,10 @@ const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, o
     }
   };
 
-  // --- ROBUST LINKEDIN VALIDATION ---
   const getValidatedLinkedinUrl = () => {
       let url = candidate.linkedinUrl || extractedData.linkedinUrl || extractedData.portfolio?.find(p => p.url?.toLowerCase().includes('linkedin'))?.url;
       if (!url) return null;
       url = url.trim();
-      const garbage = ['n/a', 'none', 'linkedin', 'link', 'profile', 'url'];
-      if (garbage.includes(url.toLowerCase())) return null;
       if (!url.toLowerCase().includes('linkedin.com')) {
           if (url.toLowerCase().startsWith('linkedin.com')) url = 'https://www.' + url;
           else return null;
@@ -169,13 +222,34 @@ const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, o
   const validLinkedinUrl = getValidatedLinkedinUrl();
   const hasLinkedin = !!validLinkedinUrl;
 
-  const radarData = [
-    { subject: 'Competency', A: normalizeScore(analysis.fiveForces.competency), fullMark: 10 },
-    { subject: 'Experience', A: normalizeScore(analysis.fiveForces.experience), fullMark: 10 },
-    { subject: 'Culture Fit', A: normalizeScore(analysis.fiveForces.cultureFit), fullMark: 10 },
-    { subject: 'Potential', A: normalizeScore(analysis.fiveForces.potential), fullMark: 10 },
-    { subject: 'Communication', A: normalizeScore(analysis.fiveForces.communication), fullMark: 10 },
-  ];
+  // DYNAMIC RADAR DATA (V3 vs Legacy)
+  const radarData = useMemo(() => {
+      if (analysis.scoringDimensions) {
+          // New V3 Logic
+          return Object.entries(analysis.scoringDimensions).map(([key, value]) => ({
+              subject: key,
+              A: normalizeScore(value as number),
+              fullMark: 10
+          }));
+      }
+      
+      // Fallback Legacy Logic
+      const getForceScore = (key: string, fallbackKey?: string) => {
+          // @ts-ignore
+          let val = analysis.fiveForces?.[key];
+          // @ts-ignore
+          if ((val === undefined || val === null) && fallbackKey) val = analysis.fiveForces?.[fallbackKey];
+          return normalizeScore(val);
+      };
+
+      return [
+        { subject: 'Skills Match', A: getForceScore('skillsMatch', 'competency'), fullMark: 10 },
+        { subject: 'Experience', A: getForceScore('experience'), fullMark: 10 },
+        { subject: 'Culture Fit', A: getForceScore('cultureFit'), fullMark: 10 },
+        { subject: 'Potential', A: getForceScore('potential'), fullMark: 10 },
+        { subject: 'Communication', A: getForceScore('communication'), fullMark: 10 },
+      ];
+  }, [analysis]);
 
   const getAvatarName = () => extractedData.englishName && extractedData.englishName !== 'Unknown' ? extractedData.englishName : extractedData.name;
   const finalAvatarUrl = currentPhotoUrl || `https://ui-avatars.com/api/?name=${encodeURIComponent(getAvatarName())}&background=random&color=fff&size=200&bold=true`;
@@ -187,6 +261,9 @@ const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, o
       if (score >= 6) return 'text-blue-600 bg-blue-50 border-blue-200';
       return 'text-red-600 bg-red-50 border-red-200';
   };
+
+  const selectedJob = availableJobs.find(j => j.id === selectedJobId);
+  const isRoleChanged = selectedJob && selectedJob.title !== candidate.roleApplied;
 
   return (
     <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 overflow-y-auto flex items-center justify-center p-4">
@@ -203,32 +280,45 @@ const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, o
                 <h2 className="text-xl font-bold text-slate-900">{extractedData.name}</h2>
                 {extractedData.englishName && <p className="text-sm text-slate-500 font-medium">{extractedData.englishName}</p>}
                 
-                {/* VERSION SELECTOR */}
-                {candidate.versions && candidate.versions.length > 0 && (
-                    <div className="mt-4 mb-2">
-                        <div className="relative">
-                            <select 
-                                value={selectedVersionDate} 
-                                onChange={(e) => setSelectedVersionDate(e.target.value)}
-                                className="w-full appearance-none bg-slate-100 border border-slate-200 text-slate-700 text-xs font-bold py-2 px-3 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                            >
-                                <option value="latest">Latest: {new Date(candidate.updatedAt).toLocaleDateString()} ({candidate.roleApplied})</option>
-                                {candidate.versions.slice().reverse().map((v, i) => (
-                                    <option key={i} value={v.date}>
-                                        History: {new Date(v.date).toLocaleDateString()} ({v.roleApplied})
-                                    </option>
-                                ))}
-                            </select>
-                            <History className="absolute right-3 top-2.5 w-3 h-3 text-slate-400 pointer-events-none" />
-                        </div>
-                    </div>
-                )}
-                
                 <div className={`mt-3 inline-flex items-center px-3 py-1 rounded-full text-lg font-bold border ${getScoreColor(finalMatchScore)}`}>
                    <span className="text-xs uppercase mr-2 opacity-70">Score</span>
                    {finalMatchScore.toFixed(1)} <span className="text-xs opacity-50 ml-1">/ 10</span>
                 </div>
             </div>
+
+            {/* --- JOB ROLE SELECTOR & SWITCHER --- */}
+            {selectedVersionDate === 'latest' && (
+                <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 flex items-center gap-1">
+                        <Briefcase className="w-3 h-3" /> Target Job Role
+                    </label>
+                    <div className="relative">
+                        <select 
+                            value={selectedJobId} 
+                            onChange={(e) => setSelectedJobId(e.target.value)}
+                            className="w-full appearance-none bg-slate-50 border border-slate-200 text-slate-800 text-sm font-bold py-2 px-3 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 pr-8"
+                        >
+                            <option value="" disabled>Select Job Role</option>
+                            {availableJobs.map(job => (
+                                <option key={job.id} value={job.id}>{job.title}</option>
+                            ))}
+                        </select>
+                        <ChevronDown className="absolute right-3 top-2.5 w-4 h-4 text-slate-400 pointer-events-none" />
+                    </div>
+                    
+                    {/* Show Button only if role is different */}
+                    {isRoleChanged && (
+                        <button 
+                            onClick={handleRoleChangeAndRescore}
+                            disabled={isReScoring}
+                            className="mt-3 w-full bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold py-2 rounded-lg flex items-center justify-center gap-2 animate-fade-in shadow-md transition-all"
+                        >
+                            {isReScoring ? <Loader2 className="w-3 h-3 animate-spin"/> : <ArrowRightLeft className="w-3 h-3" />}
+                            Switch & Re-Analyze
+                        </button>
+                    )}
+                </div>
+            )}
 
             <div className="flex flex-col gap-2 text-sm">
                 <div className="flex justify-between border-b pb-2">
@@ -261,11 +351,31 @@ const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, o
                     </div>
                 )}
 
-                {selectedVersionDate === 'latest' && (
-                    <button onClick={handleReScore} disabled={isReScoring} className="w-full bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-2">
+                {selectedVersionDate === 'latest' && !isRoleChanged && (
+                    <button onClick={handleReScoreCurrent} disabled={isReScoring} className="w-full bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-2">
                         {isReScoring ? <Loader2 className="w-3 h-3 animate-spin"/> : <RefreshCw className="w-3 h-3"/>}
-                        Re-Evaluate (Strict)
+                        Re-Evaluate (Current Role)
                     </button>
+                )}
+                
+                {/* VERSION SELECTOR */}
+                {candidate.versions && candidate.versions.length > 0 && (
+                    <div className="relative pt-2 border-t border-slate-100">
+                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">Version History</label>
+                        <select 
+                            value={selectedVersionDate} 
+                            onChange={(e) => setSelectedVersionDate(e.target.value)}
+                            className="w-full appearance-none bg-slate-100 border border-slate-200 text-slate-600 text-xs font-medium py-1.5 px-3 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        >
+                            <option value="latest">Current: {new Date(candidate.updatedAt).toLocaleDateString()}</option>
+                            {candidate.versions.slice().reverse().map((v, i) => (
+                                <option key={i} value={v.date}>
+                                    {new Date(v.date).toLocaleDateString()} - {v.roleApplied}
+                                </option>
+                            ))}
+                        </select>
+                        <History className="absolute right-3 bottom-2 w-3 h-3 text-slate-400 pointer-events-none" />
+                    </div>
                 )}
             </div>
         </aside>
@@ -303,7 +413,10 @@ const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, o
                             {/* Summary Card */}
                             <div className="bg-white p-5 rounded-lg border border-slate-200 shadow-sm relative overflow-hidden">
                                 <div className="absolute left-0 top-0 bottom-0 w-1 bg-blue-500" />
-                                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Executive Summary</h4>
+                                <div className="flex justify-between items-center mb-2">
+                                     <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest">Executive Summary</h4>
+                                     <span className="text-[10px] bg-slate-100 text-slate-500 px-2 py-0.5 rounded font-mono">Model: {analysis.modelVersion || 'Legacy'}</span>
+                                </div>
                                 <p className="text-slate-800 text-sm font-medium leading-relaxed">{analysis.summary}</p>
                             </div>
 
@@ -316,17 +429,19 @@ const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, o
 
                              {/* SWOT */}
                             <div className="grid grid-cols-2 gap-3">
-                                <SwotCard title="Pros" items={analysis.swot.strengths} color="emerald" />
-                                <SwotCard title="Cons" items={analysis.swot.weaknesses} color="red" />
+                                <SwotCard title="Pros" items={analysis.swot?.strengths || []} color="emerald" />
+                                <SwotCard title="Cons" items={analysis.swot?.weaknesses || []} color="red" />
                             </div>
                         </div>
 
                         <div className="lg:col-span-1 space-y-4">
-                            <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm h-64 flex flex-col items-center justify-center">
-                                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2 w-full text-center">5-Forces Radar</h4>
+                            <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm h-72 flex flex-col items-center justify-center">
+                                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2 w-full text-center">
+                                    {analysis.scoringDimensions ? 'Scoring Radar (V3)' : '5-Forces Radar (Legacy)'}
+                                </h4>
                                 <div className="w-full h-full">
                                     <ResponsiveContainer width="100%" height="100%">
-                                        <RadarChart cx="50%" cy="50%" outerRadius="70%" data={radarData}>
+                                        <RadarChart cx="50%" cy="50%" outerRadius="65%" data={radarData}>
                                             <PolarGrid stroke="#e2e8f0" />
                                             <PolarAngleAxis dataKey="subject" tick={{ fill: '#64748b', fontSize: 10, fontWeight: 700 }} />
                                             <PolarRadiusAxis angle={30} domain={[0, 10]} tick={false} axisLine={false} />
@@ -336,16 +451,35 @@ const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, o
                                 </div>
                             </div>
                             
+                            {/* Breakdown of Dimensions for V3 */}
+                            {analysis.scoringDimensions && (
+                                <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm">
+                                    <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">Scoring Breakdown</h4>
+                                    <div className="space-y-2">
+                                        {Object.entries(analysis.scoringDimensions).map(([key, val]) => {
+                                            const score = val as number;
+                                            return (
+                                            <div key={key} className="flex justify-between items-center text-xs">
+                                                <span className="text-slate-600">{key}</span>
+                                                <span className={`font-bold ${score >= 8 ? 'text-emerald-600' : score < 6 ? 'text-red-500' : 'text-blue-600'}`}>
+                                                    {score.toFixed(1)}
+                                                </span>
+                                            </div>
+                                        )})}
+                                    </div>
+                                </div>
+                            )}
+
                             <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm">
                                 <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">Gap Analysis</h4>
                                 <div className="space-y-3">
                                     <div>
                                         <div className="text-xs font-bold text-emerald-600 mb-1 flex items-center gap-1"><Check className="w-3 h-3"/> Matching</div>
-                                        <ul className="text-xs text-slate-600 list-disc pl-4 space-y-1">{analysis.gapAnalysis.pros.slice(0,3).map((p,i) => <li key={i}>{p}</li>)}</ul>
+                                        <ul className="text-xs text-slate-600 list-disc pl-4 space-y-1">{analysis.gapAnalysis?.pros?.slice(0,3).map((p,i) => <li key={i}>{p}</li>)}</ul>
                                     </div>
                                     <div>
                                         <div className="text-xs font-bold text-red-600 mb-1 flex items-center gap-1"><X className="w-3 h-3"/> Missing</div>
-                                        <ul className="text-xs text-slate-600 list-disc pl-4 space-y-1">{analysis.gapAnalysis.cons.slice(0,3).map((p,i) => <li key={i}>{p}</li>)}</ul>
+                                        <ul className="text-xs text-slate-600 list-disc pl-4 space-y-1">{analysis.gapAnalysis?.cons?.slice(0,3).map((p,i) => <li key={i}>{p}</li>)}</ul>
                                     </div>
                                 </div>
                             </div>
@@ -355,7 +489,7 @@ const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, o
 
                 {activeTab === 'experience' && (
                     <div className="max-w-3xl space-y-6 animate-fade-in">
-                        {extractedData.workExperience.map((job, idx) => (
+                        {extractedData.workExperience?.map((job, idx) => (
                             <div key={idx} className={`bg-white p-5 rounded-lg border ${job.isRelevant !== false ? 'border-slate-200' : 'border-slate-100 bg-slate-50 opacity-70'}`}>
                                 <div className="flex justify-between items-start mb-2">
                                     <div>
@@ -392,7 +526,7 @@ const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, o
                         <div className="mt-8 pt-8 border-t border-slate-100">
                              <h4 className="text-sm font-bold text-slate-800 mb-4 flex items-center gap-2"><Code2 className="w-4 h-4 text-blue-500"/> Skills</h4>
                              <div className="flex flex-wrap gap-2">
-                                 {extractedData.skills.map(s => <span key={s} className="px-2 py-1 bg-slate-100 text-slate-600 text-xs rounded border border-slate-200">{s}</span>)}
+                                 {extractedData.skills?.map(s => <span key={s} className="px-2 py-1 bg-slate-100 text-slate-600 text-xs rounded border border-slate-200">{s}</span>)}
                              </div>
                         </div>
                     </div>

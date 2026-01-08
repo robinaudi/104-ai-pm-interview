@@ -6,6 +6,7 @@ export interface JobDescription {
   title: string;
   content: string; // The full JD text
   department?: string;
+  priority: number; // NEW: Weighting/Ordering (1 = High, 10 = Low)
   created_at?: string;
 }
 
@@ -27,7 +28,7 @@ export enum SourceType {
 }
 
 export interface AnalysisFiveForces {
-  competency: number; // 1-10
+  skillsMatch: number; // Renamed from competency. 1-10
   experience: number;
   cultureFit: number;
   potential: number;
@@ -67,6 +68,7 @@ export interface ExtractedCandidateInfo {
   yearsOfExperience: number; // Total working years
   relevantYearsOfExperience: number; // NEW: Specific to the target role (PM/SA/Dev)
   detectedSource: string;
+  isUnsolicited?: boolean; // NEW: Detected if "Active Applicant"
   linkedinUrl?: string; // NEW: Specific field for LinkedIn
   personalInfo: PersonalInfo; 
   skills: string[]; // Tech Skills
@@ -80,13 +82,19 @@ export interface ExtractedCandidateInfo {
 export interface AnalysisResult {
   extractedData: ExtractedCandidateInfo; 
   summary: string;
+  modelVersion?: string; // NEW: Track which scoring model was used (e.g., 'v3.0')
   // NEW: Analysis against specific JD
   matchScore: number; // 0-100
   gapAnalysis: {
       pros: string[];
       cons: string[]; // Missing skills based on JD
   };
+  // NEW V3: Dynamic Scoring Dimensions (Map of "Dimension Name" -> Score)
+  scoringDimensions?: Record<string, number>;
+  
+  // Legacy support for older components
   fiveForces: AnalysisFiveForces;
+  
   swot: {
     strengths: string[];
     weaknesses: string[];
@@ -112,6 +120,7 @@ export interface Candidate {
   roleApplied: string;
   source: string; 
   status: CandidateStatus;
+  isUnsolicited: boolean; // NEW: Flag for Active Applicants
   resumeUrl?: string;
   photoUrl?: string; 
   linkedinUrl?: string; // NEW: Top level access
@@ -123,8 +132,24 @@ export interface Candidate {
   versions?: CandidateVersion[];
 
   isDeleted?: boolean; // NEW: Soft delete flag
+  deletedBy?: string; // NEW: Who deleted this candidate
+  deletedAt?: string; // NEW: When was it deleted
+  
   createdAt: string; // Acts as "Upload Date"
   updatedAt: string;
+}
+
+// --- SCORING STANDARDS (NEW) ---
+export type ScoringCategory = 'EXPERIENCE_CEILING' | 'INDUSTRY_PENALTY' | 'SKILL_WEIGHT' | 'GENERAL_RULE' | 'DIMENSION_WEIGHT';
+
+export interface ScoringStandard {
+    id: string;
+    category: ScoringCategory;
+    condition: string; // e.g. "6-10 Years Exp" or "Finance Industry" or "ERP Mastery"
+    rule_text: string; // The specific instruction OR the Weight Value (e.g. "20")
+    description?: string; // Optional description for the UI
+    priority: number; // Ordering for prompt
+    is_active: boolean;
 }
 
 // --- RBAC & Auth Types (2026.01.v2) ---
@@ -132,53 +157,51 @@ export interface Candidate {
 export type Permission = 
   | 'VIEW_DASHBOARD' 
   | 'VIEW_LIST'
-  | 'EDIT_CANDIDATE' // Replaces EDIT_PATENT for HR Context
-  | 'DELETE_CANDIDATE' // Replaces DELETE_PATENT
-  | 'IMPORT_DATA' 
-  | 'EXPORT_DATA' 
-  | 'SEND_EMAIL' 
-  | 'AI_CHAT' 
+  | 'EDIT_CANDIDATE' 
+  | 'DELETE_CANDIDATE'
+  | 'IMPORT_DATA'
+  | 'EXPORT_DATA'
+  | 'SEND_EMAIL'
+  | 'AI_CHAT'
   | 'MANAGE_ACCESS'
   | 'MANAGE_JD'
   | 'VIEW_LOGS';
 
-export interface AppRole {
-  role_name: string;
-  permissions: Permission[];
-  description?: string;
-}
-
-export interface AccessRule {
-  id: string;
-  // type column removed to match user's actual DB schema
-  value: string; // email or domain
-  role: string; // references AppRole.role_name
-  created_at: string;
+export enum UserRole {
+  ADMIN = 'ADMIN',
+  MANAGER = 'MANAGER',
+  USER = 'USER',
+  GUEST = 'GUEST'
 }
 
 export interface User {
   id: string;
   email: string;
-  role: string; // The assigned role name (e.g. 'ADMIN')
-  permissions: Permission[]; // Computed permissions based on role
+  role: string;
+  permissions: Permission[];
   avatarUrl?: string;
 }
 
-// Legacy Enum for backward compatibility if needed, but RBAC prefers strings now
-export enum UserRole {
-  ADMIN = 'ADMIN',
-  MANAGER = 'MANAGER',
-  RECRUITER = 'RECRUITER',
-  VIEWER = 'VIEWER'
+export interface AppRole {
+  role_name: string;
+  permissions: Permission[];
+  description?: string;
+  created_at?: string;
 }
 
-// Log Types
+export interface AccessRule {
+  id: string;
+  type: 'EMAIL' | 'DOMAIN';
+  value: string;
+  role: string;
+  created_at?: string;
+}
 
 export interface ActionLog {
   id: string;
+  user_email: string;
   action: string;
-  user_email: string; // Changed from userEmail to match DB
-  target?: string;    // Changed from details to target/details structure
-  details: any;       // JSONB in DB
+  target?: string;
+  details?: any;
   created_at: string;
 }

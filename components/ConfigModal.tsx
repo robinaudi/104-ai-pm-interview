@@ -42,7 +42,7 @@ const ConfigModal: React.FC<ConfigModalProps> = ({ onClose }) => {
       setTimeout(() => setCopySuccess(false), 2000);
   };
 
-  const sqlCode = `-- SYSTEM UPDATE 2026.01.v2 Schema (Safe Re-run)
+  const sqlCode = `-- SYSTEM UPDATE 2026.01.v4 Schema (Includes Deleted By)
   
 -- 1. ROLES & PERMISSIONS
 CREATE TABLE IF NOT EXISTS app_roles (
@@ -68,9 +68,7 @@ CREATE TABLE IF NOT EXISTS access_control (
     created_at timestamptz DEFAULT now()
 );
 
--- Default Admin Access (Updated)
--- We use ON CONFLICT DO NOTHING to prevent duplicates if re-running, assuming value is unique or just insert.
--- Since there is no unique constraint on value by default, we just check if it exists or let it be.
+-- Default Admin Access
 INSERT INTO access_control (type, value, role) 
 SELECT 'EMAIL', 'robinhsu@91app.com', 'ADMIN'
 WHERE NOT EXISTS (
@@ -87,7 +85,18 @@ CREATE TABLE IF NOT EXISTS action_logs (
     created_at timestamptz DEFAULT now()
 );
 
--- 4. CORE TABLES (Existing)
+-- 4. SCORING STANDARDS
+CREATE TABLE IF NOT EXISTS scoring_standards (
+    id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+    category text NOT NULL, -- EXPERIENCE_CEILING, INDUSTRY_PENALTY, etc.
+    condition text,
+    rule_text text NOT NULL,
+    priority int DEFAULT 0,
+    is_active boolean DEFAULT true,
+    created_at timestamptz DEFAULT now()
+);
+
+-- 5. CORE TABLES
 CREATE TABLE IF NOT EXISTS candidates (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
@@ -103,7 +112,9 @@ CREATE TABLE IF NOT EXISTS candidates (
   linkedin_url TEXT,
   analysis JSONB,
   personal_info JSONB,
-  is_deleted BOOLEAN DEFAULT FALSE
+  is_deleted BOOLEAN DEFAULT FALSE,
+  deleted_by TEXT, -- NEW: Who deleted it
+  deleted_at TIMESTAMP WITH TIME ZONE -- NEW: When it was deleted
 );
 
 CREATE TABLE IF NOT EXISTS job_descriptions (
@@ -122,13 +133,14 @@ CREATE TABLE IF NOT EXISTS candidate_views (
   UNIQUE(candidate_id, user_email)
 );
 
--- 5. RLS POLICIES (Safe Drop & Create)
+-- 6. RLS POLICIES (Safe Drop & Create)
 ALTER TABLE candidates ENABLE ROW LEVEL SECURITY;
 ALTER TABLE job_descriptions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE candidate_views ENABLE ROW LEVEL SECURITY;
 ALTER TABLE app_roles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE access_control ENABLE ROW LEVEL SECURITY;
 ALTER TABLE action_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE scoring_standards ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "Public Access" ON candidates;
 CREATE POLICY "Public Access" ON candidates FOR ALL USING (true) WITH CHECK (true);
@@ -147,6 +159,9 @@ CREATE POLICY "Public Access" ON access_control FOR ALL USING (true) WITH CHECK 
 
 DROP POLICY IF EXISTS "Public Access" ON action_logs;
 CREATE POLICY "Public Access" ON action_logs FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Public Access" ON scoring_standards;
+CREATE POLICY "Public Access" ON scoring_standards FOR ALL USING (true) WITH CHECK (true);
 `;
 
   return (
@@ -181,7 +196,7 @@ CREATE POLICY "Public Access" ON action_logs FOR ALL USING (true) WITH CHECK (tr
                   </div>
                   {isConfigured && (
                     <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 flex flex-col gap-2">
-                        <button onClick={handleResetData} disabled={isResetting} className="bg-amber-100 hover:bg-amber-200 text-amber-800 px-4 py-2 rounded text-sm">{isResetting ? 'Resetting...' : 'Reset DB with Default JDs'}</button>
+                        <button onClick={handleResetData} disabled={isResetting} className="bg-amber-100 hover:bg-amber-200 text-amber-800 px-4 py-2 rounded text-sm">{isResetting ? 'Resetting...' : 'Reset DB with Default JDs & Rules'}</button>
                     </div>
                   )}
               </div>
@@ -190,7 +205,7 @@ CREATE POLICY "Public Access" ON action_logs FOR ALL USING (true) WITH CHECK (tr
           {activeTab === 'schema' && (
               <div className="space-y-4">
                   <div className="bg-blue-50 border border-blue-100 p-4 rounded-lg text-sm text-blue-800 flex justify-between items-center">
-                      <span>Run this script in Supabase SQL Editor to create ALL tables (Candidates, Roles, Access).</span>
+                      <span>Run this script in Supabase SQL Editor to create ALL tables (Candidates, Roles, Rules).</span>
                       <button onClick={handleCopySQL} className="bg-white border border-blue-200 px-3 py-1.5 rounded-md text-blue-700 text-xs font-bold">{copySuccess ? 'Copied!' : 'Copy SQL'}</button>
                   </div>
                   <pre className="bg-slate-800 text-slate-200 p-4 rounded-lg text-xs font-mono overflow-auto h-96 select-all">{sqlCode}</pre>

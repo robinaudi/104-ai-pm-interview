@@ -1,43 +1,87 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
-import { AnalysisResult, Candidate } from "../types";
+import { AnalysisResult, Candidate, ScoringStandard } from "../types";
+import { fetchScoringStandards } from "./supabaseService";
+import { APP_VERSION } from "../constants";
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-// Dynamic instruction generator
-const getSystemInstruction = (language: string, jdContent: string) => `
+// Helper to decode Industry Rule stored as JSON
+const formatIndustryRule = (standard: ScoringStandard): string => {
+    if (standard.category !== 'INDUSTRY_PENALTY') return standard.rule_text;
+    
+    // Check if rule_text looks like JSON
+    try {
+        const config = JSON.parse(standard.rule_text);
+        // It's a structured penalty. Format it for AI.
+        // Example: {"competency": 0.7, "culture": 0.6}
+        const industry = standard.condition;
+        const penalties = Object.entries(config)
+            .map(([key, val]) => {
+                const displayKey = key === 'competency' ? 'Skills Match' : key.charAt(0).toUpperCase() + key.slice(1);
+                return `${displayKey} x${val}`;
+            })
+            .join(', ');
+        
+        return `IF Candidate Industry is "${industry}" -> Apply Multipliers: ${penalties}. \n   CRITICAL: Add "Industry Penalty Applied: ${industry}" to Gap Analysis.`;
+    } catch (e) {
+        return standard.rule_text;
+    }
+};
+
+// Construct prompt dynamically from DB Standards
+const getSystemInstruction = (language: string, jdContent: string, standards: ScoringStandard[]) => {
+    
+    const experienceRules = standards
+        .filter(s => s.category === 'EXPERIENCE_CEILING' && s.is_active)
+        .sort((a, b) => a.priority - b.priority)
+        .map(s => `- ${s.rule_text}`)
+        .join('\n');
+
+    const industryRules = standards
+        .filter(s => s.category === 'INDUSTRY_PENALTY' && s.is_active)
+        .sort((a, b) => a.priority - b.priority)
+        .map(s => `- ${formatIndustryRule(s)}`)
+        .join('\n');
+
+    const generalRules = standards
+        .filter(s => s.category === 'GENERAL_RULE' && s.is_active)
+        .sort((a, b) => a.priority - b.priority)
+        .map(s => `- ${s.rule_text}`)
+        .join('\n');
+
+    // NEW: V3 DYNAMIC DIMENSIONS
+    const dimensionRules = standards
+        .filter(s => s.category === 'DIMENSION_WEIGHT' && s.is_active)
+        .sort((a, b) => a.priority - b.priority)
+        .map(s => {
+            return `   - **${s.condition}** (Weight: ${s.rule_text}%): ${s.description || 'Rate 0-10'}`;
+        })
+        .join('\n');
+
+    return `
 You are Robin Hsu, VP of a leading SaaS company. You are known for being EXTREMELY STRICT, REALISTIC, and DATA-DRIVEN.
 You despise grade inflation. 
 
-*** 1. THE ROBIN HSU SCORING STANDARD (BASE CEILING) ***
-First, determine the base score range based on years of experience:
-- Score 10.0 : 20+ Years. (VP/Director Level).
-- Score 8.0 - 9.9 : 10-15 Years. (Dept Manager Level).
-- Score 6.0 - 7.9 : 6-10 Years. (Senior / Team Lead). -> **CRITICAL: A 6-year candidate MAX score is ~7.5.**
-- Score 3.0 - 5.9 : 3-5 Years. (Mid-level Executor).
-- Score 1.0 - 2.9 : 0-2 Years. (Junior / Entry).
+*** 1. SCORING MATRIX (THE CORE - 100 POINTS) ***
+You must evaluate the candidate based on the following Weighted Dimensions. 
+Scores are 0-10. Weighted Sum is the Final Match Score.
 
-*** 2. INDUSTRY PENALTY (THE "TRADITIONAL SECTOR" TAX) ***
-**CRITICAL RULE:** E-commerce/SaaS requires speed and agility. Candidates from bureaucratic industries often fail to adapt.
-Check the candidate's **Current or Primary Industry**. If they come from:
-- **Financial Holdings / Banks / FinTech** (金控, 銀行, 國泰, 富邦, 中信, 玉山...)
-- **Telecom** (電信, 中華電信, 遠傳, 台哥大...)
-- **Government / Public Sector** (政府機關, 公家單位)
-- **Research Institutes / Foundations** (資策會, 工研院, 財團法人, 協會)
+${dimensionRules || '- No dimensions configured. Use general judgement.'}
 
-You MUST apply the following **DISCOUNT MULTIPLIERS** to their 5-Forces and Match Score. **DO NOT HESITATE.**
+*** 2. EXPERIENCE CEILING (Baseline) ***
+First, calculate "Effective Relevant Years" by applying discounts:
+${generalRules || '- No specific discount rules.'}
+Then apply ceilings:
+${experienceRules || '- No specific experience ceilings defined.'}
 
-- **Competency (競爭力)**: Multiply by **0.7** (Skills are often outdated or strictly process-bound).
-- **Culture Fit (文化)**: Multiply by **0.6** (Lack of Agile mindset, used to bureaucracy).
-- **Potential (潛力)**: Multiply by **0.6** (Hard to reshape work habits).
-- **Communication (溝通)**: Multiply by **0.8** (Used to hierarchical reporting, not flat comms).
-- **Experience (經驗)**: Multiply by **0.9** (Years of experience are less relevant to SaaS).
+*** 3. INDUSTRY PENALTY ***
+${industryRules || '- No specific industry penalties defined.'}
 
-*CALCULATION EXAMPLE*:
-A candidate from "Cathay Financial (國泰金控)" with 6 years exp might start at Base 7.0.
-- Apply Culture Fit 0.6x -> 4.2.
-- Apply Competency 0.7x -> 4.9.
-- **FINAL MATCH SCORE** should be significantly reduced (e.g., from 7.0 -> 5.5).
+*** 4. ACTIVE APPLICANT DETECTION ***
+Check if the resume text explicitly mentions **"主動應徵"**, **"Active Application"**, or similar phrases in the header or objective section.
+- If found -> Set "isUnsolicited" to TRUE.
+- If not found -> Set "isUnsolicited" to FALSE.
 
 *** JOB DESCRIPTION ***
 ${jdContent}
@@ -47,7 +91,7 @@ ${jdContent}
 - **Summary**: ONE sentence.
 - **HR Advice**: 3 Bullet points ONLY.
   1. Verdict: STRICTLY USE "Proceed to Interview" OR "Reject".
-  2. Key Risk: **If Industry Penalty applied, explicitly state: "Score discounted due to Traditional Industry background (High bureaucracy, low agility)."**
+  2. Key Risk: **If Industry Penalty OR Low Skill Relevance applied, explicitly state why.**
   3. Key Strength.
 - **Language**: ${language}.
 
@@ -56,6 +100,7 @@ ${jdContent}
 
 You must output strictly in JSON format matching the schema.
 `;
+};
 
 // Schema for structured output
 const analysisSchema = {
@@ -71,6 +116,7 @@ const analysisSchema = {
         yearsOfExperience: { type: Type.NUMBER },
         relevantYearsOfExperience: { type: Type.NUMBER },
         detectedSource: { type: Type.STRING },
+        isUnsolicited: { type: Type.BOOLEAN },
         linkedinUrl: { type: Type.STRING },
         personalInfo: {
             type: Type.OBJECT,
@@ -114,25 +160,31 @@ const analysisSchema = {
       required: ["name", "email", "yearsOfExperience", "relevantYearsOfExperience", "personalInfo", "workExperience"]
     },
     summary: { type: Type.STRING },
-    matchScore: { type: Type.NUMBER, description: "Score 0-10 based on Experience Ceiling AND Industry Penalty" },
+    matchScore: { type: Type.NUMBER, description: "Final weighted score 0-10" },
+    // NEW: Dynamic Map for Scoring Dimensions
+    scoringDimensions: {
+        type: Type.OBJECT,
+        description: "Key-Value pair of Dimension Name and Score (0-10). Must match the dimensions provided in system instructions.",
+        properties: {}, // Allow dynamic keys
+    },
     gapAnalysis: {
         type: Type.OBJECT,
         properties: {
-            pros: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Top 3 Pros" },
-            cons: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Top 3 Cons" }
+            pros: { type: Type.ARRAY, items: { type: Type.STRING } },
+            cons: { type: Type.ARRAY, items: { type: Type.STRING } }
         },
         required: ["pros", "cons"]
     },
     fiveForces: {
       type: Type.OBJECT,
       properties: {
-        competency: { type: Type.NUMBER },
+        skillsMatch: { type: Type.NUMBER },
         experience: { type: Type.NUMBER },
         cultureFit: { type: Type.NUMBER },
         potential: { type: Type.NUMBER },
         communication: { type: Type.NUMBER },
       },
-      required: ["competency", "experience", "cultureFit", "potential", "communication"]
+      required: ["skillsMatch", "experience", "cultureFit", "potential", "communication"]
     },
     swot: {
       type: Type.OBJECT,
@@ -150,7 +202,6 @@ const analysisSchema = {
   required: ["extractedData", "matchScore", "gapAnalysis", "summary", "fiveForces", "swot", "hrAdvice", "interviewQuestions"]
 };
 
-// Helper to strictly parse years
 const cleanYearsOfExperience = (input: any): number => {
     if (typeof input === 'number') return input;
     if (typeof input === 'string') {
@@ -160,11 +211,9 @@ const cleanYearsOfExperience = (input: any): number => {
     return 0;
 };
 
-// Secondary Step: Use Google Search to find LinkedIn if missing
 const findLinkedInUrl = async (name: string, email: string, company: string): Promise<string | null> => {
     try {
         const query = `site:linkedin.com/in/ ${email} OR "${name}"`;
-        
         const response = await ai.models.generateContent({
             model: 'gemini-3-flash-preview',
             contents: `Find the LinkedIn profile URL for: Name: ${name}, Email: ${email}, Company: ${company}. Search Query: ${query}. Return ONLY the URL string. If not found, return "null".`,
@@ -172,8 +221,6 @@ const findLinkedInUrl = async (name: string, email: string, company: string): Pr
                 tools: [{ googleSearch: {} }]
             }
         });
-
-        // Extract URL from grounding chunks (most reliable)
         const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
         if (groundingChunks) {
             for (const chunk of groundingChunks) {
@@ -182,8 +229,6 @@ const findLinkedInUrl = async (name: string, email: string, company: string): Pr
                 }
             }
         }
-
-        // Fallback: Check text text
         const text = response.text || '';
         const urlMatch = text.match(/https:\/\/www\.linkedin\.com\/in\/[\w-]+/);
         return urlMatch ? urlMatch[0] : null;
@@ -199,19 +244,21 @@ export const analyzeResume = async (base64Data: string, mimeType: string, jobRol
   if (!process.env.API_KEY) throw new Error("Gemini API Key is missing.");
 
   const effectiveJd = jdContent || `Target Role: ${jobRole}`;
+  
+  // FETCH SCORING STANDARDS
+  const standards = await fetchScoringStandards();
 
   try {
-    // 1. First Pass: Strict PDF Parsing
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
       contents: {
         parts: [
-            { text: `Analyze this resume against the JD. Output JSON in ${language}.` },
+            { text: `Analyze this resume against the JD. Output JSON in ${language}. Use model version ${APP_VERSION}.` },
             { inlineData: { mimeType: mimeType, data: base64Data } }
         ]
       },
       config: {
-        systemInstruction: getSystemInstruction(language, effectiveJd),
+        systemInstruction: getSystemInstruction(language, effectiveJd, standards),
         responseMimeType: "application/json",
         responseSchema: analysisSchema
       }
@@ -221,7 +268,7 @@ export const analyzeResume = async (base64Data: string, mimeType: string, jobRol
     
     const parsed = parseResponse(response.text);
 
-    // 2. Second Pass: Smart LinkedIn Discovery (if missing)
+    // LinkedIn Discovery
     const currentUrl = parsed.extractedData.linkedinUrl?.toLowerCase();
     const isInvalid = !currentUrl || currentUrl === 'n/a' || currentUrl === 'null' || !currentUrl.includes('linkedin.com');
 
@@ -235,6 +282,8 @@ export const analyzeResume = async (base64Data: string, mimeType: string, jobRol
              }
         }
     }
+    
+    parsed.modelVersion = APP_VERSION;
 
     return parsed;
 
@@ -250,25 +299,30 @@ export const reEvaluateCandidate = async (candidate: Candidate, jdContent: strin
     if (!candidate.analysis) throw new Error("Candidate has no existing data to re-evaluate.");
 
     const resumeTextRepresentation = JSON.stringify(candidate.analysis.extractedData, null, 2);
+    
+    // FETCH SCORING STANDARDS
+    const standards = await fetchScoringStandards();
 
     try {
         const response = await ai.models.generateContent({
             model: 'gemini-3-flash-preview',
             contents: {
                 parts: [
-                    { text: `RE-EVALUATE this candidate against the JD using STRICT Robin Hsu Scoring (0-10). Be concise.` },
+                    { text: `RE-EVALUATE this candidate against the JD using STRICT Robin Hsu Scoring (0-10) with SKILL MATCH and EXPERIENCE DISCOUNT logic. Be concise. Use model version ${APP_VERSION}.` },
                     { text: `CANDIDATE DATA:\n${resumeTextRepresentation}` }
                 ]
             },
             config: {
-                systemInstruction: getSystemInstruction(language, jdContent),
+                systemInstruction: getSystemInstruction(language, jdContent, standards),
                 responseMimeType: "application/json",
                 responseSchema: analysisSchema
             }
         });
 
         if (response.text) {
-            return parseResponse(response.text);
+            const parsed = parseResponse(response.text);
+            parsed.modelVersion = APP_VERSION;
+            return parsed;
         } else {
             throw new Error("No response from AI");
         }
@@ -288,27 +342,40 @@ const parseResponse = (text: string): AnalysisResult => {
     
     const parsed = JSON.parse(cleanText) as AnalysisResult;
 
-    // SAFETY CHECKS & NORMALIZATION
     parsed.extractedData.yearsOfExperience = cleanYearsOfExperience(parsed.extractedData.yearsOfExperience);
     parsed.extractedData.relevantYearsOfExperience = cleanYearsOfExperience(parsed.extractedData.relevantYearsOfExperience);
     
-    // Fallback if AI forgot to generate relevantYears
+    let src = (parsed.extractedData.detectedSource || 'Unknown').trim();
+    const lowerSrc = src.toLowerCase();
+    
+    if (lowerSrc.includes('104')) src = '104 Corp';
+    else if (lowerSrc.includes('linkedin')) src = 'LinkedIn';
+    else if (lowerSrc.includes('teamdoor')) src = 'Teamdoor';
+    else if (lowerSrc.includes('cake')) src = 'CakeResume';
+    else if (lowerSrc.includes('resume') || lowerSrc.includes('pdf') || lowerSrc.includes('upload')) src = 'User Upload';
+    
+    parsed.extractedData.detectedSource = src;
+
     if (!parsed.extractedData.relevantYearsOfExperience) {
         parsed.extractedData.relevantYearsOfExperience = parsed.extractedData.yearsOfExperience;
     }
 
-    if (!parsed.extractedData.detectedSource) parsed.extractedData.detectedSource = 'Unknown';
     if (!parsed.extractedData.otherSkills) parsed.extractedData.otherSkills = [];
     if (!parsed.gapAnalysis) parsed.gapAnalysis = { pros: [], cons: [] };
     
-    // FORCE SCORE TO 0-10 RANGE
     if (parsed.matchScore > 10) parsed.matchScore = parsed.matchScore / 10;
     
-    // Ensure all 5 forces are 0-10
     if (parsed.fiveForces) {
         Object.keys(parsed.fiveForces).forEach(k => {
             const key = k as keyof typeof parsed.fiveForces;
             if (parsed.fiveForces[key] > 10) parsed.fiveForces[key] = parsed.fiveForces[key] / 10;
+        });
+    }
+    
+    // Sanitize scoringDimensions if present
+    if (parsed.scoringDimensions) {
+         Object.keys(parsed.scoringDimensions).forEach(k => {
+            if (parsed.scoringDimensions![k] > 10) parsed.scoringDimensions![k] = parsed.scoringDimensions![k] / 10;
         });
     }
 

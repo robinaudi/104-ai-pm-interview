@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Upload, FileText, Loader2, AlertCircle, CheckCircle, Briefcase, Image as ImageIcon, Link as LinkIcon, Clipboard, ChevronDown, Camera, ExternalLink, Search, Linkedin, Mail, User as UserIcon, AlertTriangle, ArrowRight, History, Eye, Crop } from 'lucide-react';
+import { X, Upload, FileText, Loader2, AlertCircle, CheckCircle, Briefcase, Image as ImageIcon, Link as LinkIcon, Clipboard, ChevronDown, Camera, ExternalLink, Search, Linkedin, Mail, User as UserIcon, AlertTriangle, ArrowRight, History, Eye, Crop, Star, Zap } from 'lucide-react';
 import { analyzeResume } from '../services/geminiService';
 import { extractProfileImageFromPDF, renderPDFPageToDataURL } from '../services/pdfService';
 import { Candidate, CandidateStatus, User, JobDescription } from '../types';
@@ -39,10 +39,28 @@ const ImportModal: React.FC<ImportModalProps> = ({ onClose, onImport, onUpdate, 
 
   useEffect(() => {
       const loadJobs = async () => {
-          const jobs = await fetchJobDescriptions();
-          setAvailableJobs(jobs.length > 0 ? jobs : DEFAULT_JOBS);
-          if (jobs.length > 0) setSelectedJobId(jobs[0].id);
-          else if (DEFAULT_JOBS.length > 0) setSelectedJobId(DEFAULT_JOBS[0].id);
+          let jobs = await fetchJobDescriptions();
+          if (jobs.length === 0) jobs = DEFAULT_JOBS;
+          
+          // SORT BY PRIORITY (Lower number = Higher Priority)
+          // Default to 99 if priority is missing to put them last
+          const sortedJobs = jobs.sort((a, b) => (a.priority || 99) - (b.priority || 99));
+          
+          setAvailableJobs(sortedJobs);
+          
+          // INTELLIGENT DEFAULT SELECTION
+          // Prioritize "Project Manager" or "專案經理" if available, regardless of priority order
+          const pmJob = sortedJobs.find(j => 
+              j.title.includes('Project Manager') || 
+              j.title.includes('專案經理') || 
+              (j.title.includes('PM') && !j.title.includes('TPM'))
+          );
+
+          if (pmJob) {
+              setSelectedJobId(pmJob.id);
+          } else if (sortedJobs.length > 0) {
+              setSelectedJobId(sortedJobs[0].id);
+          }
       };
       loadJobs();
   }, []);
@@ -196,6 +214,7 @@ const ImportModal: React.FC<ImportModalProps> = ({ onClose, onImport, onUpdate, 
       
       const extractedName = analysisResult.extractedData.name !== 'Unknown' ? analysisResult.extractedData.name : file.name.split('.')[0];
       const extractedEmail = analysisResult.extractedData.email !== 'Unknown' ? analysisResult.extractedData.email : 'unknown@example.com';
+      const isUnsolicited = analysisResult.extractedData.isUnsolicited || false;
       
       let finalSource = analysisResult.extractedData.detectedSource;
       if (linkedInUrl && (!finalSource || finalSource === 'Unknown')) finalSource = 'LinkedIn (Verified)';
@@ -218,13 +237,14 @@ const ImportModal: React.FC<ImportModalProps> = ({ onClose, onImport, onUpdate, 
           const updatedCandidate: Candidate = {
               ...duplicateCandidate,
               roleApplied: selectedJob?.title || duplicateCandidate.roleApplied,
-              status: CandidateStatus.NEW, // Reset status to New on re-apply? Or keep? Usually New.
+              status: CandidateStatus.NEW, 
               updatedAt: new Date().toISOString(),
               analysis: analysisResult,
               versions: newVersions,
               photoUrl: extractedPhoto || duplicateCandidate.photoUrl,
-              resumeUrl: URL.createObjectURL(file), // Update resume file
-              uploadedBy: currentUser.email
+              resumeUrl: URL.createObjectURL(file), 
+              uploadedBy: currentUser.email,
+              isUnsolicited: isUnsolicited 
           };
 
           onUpdate(updatedCandidate);
@@ -244,7 +264,8 @@ const ImportModal: React.FC<ImportModalProps> = ({ onClose, onImport, onUpdate, 
             uploadedBy: currentUser.email,
             linkedinUrl: linkedInUrl,
             photoUrl: extractedPhoto || undefined,
-            versions: []
+            versions: [],
+            isUnsolicited: isUnsolicited
           };
           onImport(newCandidate);
       }
@@ -295,6 +316,11 @@ const ImportModal: React.FC<ImportModalProps> = ({ onClose, onImport, onUpdate, 
                         </select>
                         <ChevronDown className="absolute right-3 top-3.5 w-4 h-4 text-slate-400 pointer-events-none" />
                     </div>
+                    {availableJobs.length > 0 && availableJobs.find(j => j.id === selectedJobId)?.priority === 1 && (
+                        <div className="mt-1 text-[10px] text-emerald-600 font-bold flex items-center gap-1">
+                            <Star className="w-3 h-3 fill-emerald-600" /> High Priority Role
+                        </div>
+                    )}
                 </div>
 
                 <div className="flex gap-4 items-stretch h-56">
@@ -394,6 +420,19 @@ const ImportModal: React.FC<ImportModalProps> = ({ onClose, onImport, onUpdate, 
                               </p>
                           </div>
                       </div>
+                  )}
+                  
+                  {/* ACTIVE APPLICANT NOTICE */}
+                  {analysisResult.extractedData.isUnsolicited && (
+                       <div className="bg-indigo-50 border border-indigo-200 p-3 rounded-lg flex items-center gap-3">
+                           <div className="bg-indigo-600 text-white p-1 rounded-full">
+                               <Zap className="w-4 h-4" />
+                           </div>
+                           <div>
+                               <h3 className="text-sm font-bold text-indigo-800">Active Applicant Detected</h3>
+                               <p className="text-xs text-indigo-600">The AI detected "Active Application" keywords in this resume.</p>
+                           </div>
+                       </div>
                   )}
 
                   {/* COMPARISON VIEW */}
