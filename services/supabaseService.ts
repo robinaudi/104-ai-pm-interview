@@ -1,6 +1,6 @@
 
 import { createClient } from '@supabase/supabase-js';
-import { Candidate, JobDescription, AppRole, AccessRule, Permission, ScoringStandard } from '../types';
+import { Candidate, JobDescription, AppRole, AccessRule, Permission, ScoringStandard, AnalysisResult } from '../types';
 import { MOCK_CANDIDATES, DEFAULT_JOBS, DEFAULT_SCORING_STANDARDS } from '../constants';
 
 // Helper to get env vars safely
@@ -80,6 +80,8 @@ const T_ROLES = 'app_roles';
 const T_ACCESS = 'access_control';
 const T_LOGS = 'action_logs';
 const T_STANDARDS = 'scoring_standards'; 
+const T_EVALUATIONS = 'candidate_evaluations'; // NEW
+const T_EVAL_DIMS = 'evaluation_dimensions'; // NEW
 
 // --- RBAC & AUTH SERVICE ---
 
@@ -255,18 +257,68 @@ export const fetchDeletedCandidates = async (): Promise<Candidate[]> => {
     return (data || []).map(c => fromDatabaseLayer(c));
 };
 
+// --- NEW: EVALUATION SAVING LOGIC (INDEPENDENT TABLES) ---
+const saveEvaluationSnapshot = async (candidate: Candidate) => {
+    if (!candidate.analysis || !isSupabaseConfigured()) return;
+
+    // 1. Insert into candidate_evaluations
+    const evalPayload = {
+        candidate_id: candidate.id,
+        model_version: candidate.analysis.modelVersion || 'v3.0',
+        total_score: candidate.analysis.matchScore,
+        snapshot_summary: candidate.analysis.evaluationSnapshot, // JSONB
+        evaluator_email: candidate.uploadedBy
+    };
+
+    const { data: evalData, error: evalError } = await supabase
+        .from(T_EVALUATIONS)
+        .insert(evalPayload)
+        .select()
+        .single();
+    
+    if (evalError) {
+        console.warn("Failed to save independent evaluation record (Table might be missing):", evalError.message);
+        return; // Non-blocking
+    }
+
+    // 2. Insert into evaluation_dimensions (if details exist)
+    if (candidate.analysis.dimensionDetails && evalData) {
+        const dimPayloads = candidate.analysis.dimensionDetails.map(d => ({
+            evaluation_id: evalData.id,
+            dimension_name: d.dimension,
+            weight: d.weight,
+            score: d.score,
+            reasoning: d.reasoning
+        }));
+        
+        const { error: dimError } = await supabase.from(T_EVAL_DIMS).insert(dimPayloads);
+        if (dimError) console.warn("Failed to save dimensions:", dimError.message);
+    }
+};
+
 export const createCandidate = async (candidate: Candidate): Promise<void> => {
   if (!isSupabaseConfigured()) return;
   const dbPayload = toDatabaseLayer(candidate);
+  
   const { error } = await supabase.from(T_CANDIDATES).insert([dbPayload]);
   if (error) throw error;
+
+  // Save the initial evaluation snapshot to external table
+  await saveEvaluationSnapshot(candidate);
 };
 
 export const updateCandidate = async (candidate: Candidate): Promise<void> => {
   if (!isSupabaseConfigured()) return;
   const dbPayload = toDatabaseLayer(candidate);
+  
   const { error } = await supabase.from(T_CANDIDATES).update(dbPayload).eq('id', candidate.id);
   if (error) throw error;
+
+  // Save evaluation snapshot whenever analysis is updated
+  // We check if "updatedAt" is recent to avoid dupes on minor status changes, 
+  // but simpler logic is: always save snapshot on 'update' calls that contain full analysis data.
+  // The UI calls this mostly for Re-scoring.
+  await saveEvaluationSnapshot(candidate);
 };
 
 // Updated Soft Delete to track WHO and WHEN
@@ -413,6 +465,12 @@ export const resetDatabaseWithMockData = async (): Promise<void> => {
     await supabase.from(T_CANDIDATES).delete().neq('id', '00000000-0000-0000-0000-000000000000'); 
     await supabase.from(T_JOBS).delete().neq('id', '0');
     await supabase.from(T_STANDARDS).delete().neq('id', '00000000-0000-0000-0000-000000000000');
+    
+    // Clean external tables too
+    try {
+        await supabase.from(T_EVAL_DIMS).delete().neq('id', '00000000-0000-0000-0000-000000000000');
+        await supabase.from(T_EVALUATIONS).delete().neq('id', '00000000-0000-0000-0000-000000000000');
+    } catch(e) {}
 
     const candidatesToInsert = MOCK_CANDIDATES.map(({ id, ...rest }) => {
         const candidateNoId = { ...rest, id: crypto.randomUUID() } as Candidate;

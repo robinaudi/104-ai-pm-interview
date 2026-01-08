@@ -18,7 +18,7 @@ interface CandidateTableProps {
   onClearFilters: () => void;
 }
 
-type SortKey = 'name' | 'roleApplied' | 'status' | 'source' | 'createdAt' | 'score';
+type SortKey = 'name' | 'roleApplied' | 'status' | 'source' | 'updatedAt' | 'score';
 type SortDirection = 'asc' | 'desc';
 
 const CandidateTable: React.FC<CandidateTableProps> = ({ 
@@ -38,7 +38,7 @@ const CandidateTable: React.FC<CandidateTableProps> = ({
   
   const [searchQuery, setSearchQuery] = useState('');
   const [sortConfig, setSortConfig] = useState<{ key: SortKey; direction: SortDirection }>({
-    key: 'createdAt',
+    key: 'updatedAt', // CHANGED: Default sort by Updated Date
     direction: 'desc',
   });
   
@@ -107,9 +107,9 @@ const CandidateTable: React.FC<CandidateTableProps> = ({
           valA = a.source.toLowerCase();
           valB = b.source.toLowerCase();
           break;
-        case 'createdAt':
-          valA = new Date(a.createdAt).getTime();
-          valB = new Date(b.createdAt).getTime();
+        case 'updatedAt': // CHANGED: Sort by Updated Date
+          valA = new Date(a.updatedAt).getTime();
+          valB = new Date(b.updatedAt).getTime();
           break;
         case 'score':
           valA = getNormalizedScore(a);
@@ -131,7 +131,7 @@ const CandidateTable: React.FC<CandidateTableProps> = ({
         return { key, direction: current.direction === 'asc' ? 'desc' : 'asc' };
       }
       // Defaults: Newest Date first, Highest Score first. Others A-Z.
-      const defaultDirection = (key === 'createdAt' || key === 'score') ? 'desc' : 'asc';
+      const defaultDirection = (key === 'updatedAt' || key === 'score') ? 'desc' : 'asc';
       return { key, direction: defaultDirection };
     });
   };
@@ -282,8 +282,9 @@ const CandidateTable: React.FC<CandidateTableProps> = ({
                     <th className="px-6 py-4 cursor-pointer hover:bg-slate-100 group transition-colors" onClick={() => handleSort('source')}>
                         <div className="flex items-center gap-2">{t('source')} <SortIcon column="source" /></div>
                     </th>
-                    <th className="px-6 py-4 cursor-pointer hover:bg-slate-100 group transition-colors" onClick={() => handleSort('createdAt')}>
-                        <div className="flex items-center gap-2">{t('uploadedInfo')} <SortIcon column="createdAt" /></div>
+                    {/* CHANGED: Display Last Updated */}
+                    <th className="px-6 py-4 cursor-pointer hover:bg-slate-100 group transition-colors" onClick={() => handleSort('updatedAt')}>
+                        <div className="flex items-center gap-2">{t('lastUpdated')} <SortIcon column="updatedAt" /></div>
                     </th> 
                     <th className="px-6 py-4 w-32 cursor-pointer hover:bg-slate-100 group transition-colors" onClick={() => handleSort('score')}>
                         <div className="flex items-center gap-2">{t('aiScore')} <SortIcon column="score" /></div>
@@ -321,10 +322,13 @@ const CandidateTable: React.FC<CandidateTableProps> = ({
                         <span className={`px-2.5 py-1 rounded-md text-xs font-bold border ${getStatusColor(c.status)}`}>{c.status}</span>
                     </td>
                     <td className="px-6 py-4 text-sm">{getSourceBadge(c.source)}</td>
+                    
+                    {/* CHANGED: Display UpdatedAt */}
                     <td className="px-6 py-4 text-xs text-slate-500">
-                        <div className="font-medium text-slate-700">{formatDate(c.createdAt).split(' ')[0]}</div>
-                        <div className="text-[10px] opacity-70">{formatDate(c.createdAt).split(' ')[1]}</div>
+                        <div className="font-medium text-slate-700">{formatDate(c.updatedAt).split(' ')[0]}</div>
+                        <div className="text-[10px] opacity-70">{formatDate(c.updatedAt).split(' ')[1]}</div>
                     </td>
+                    
                     <td className="px-6 py-4">
                         <div className="flex items-center gap-2">
                             <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden w-full border border-slate-200">

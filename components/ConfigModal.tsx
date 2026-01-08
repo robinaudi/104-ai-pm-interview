@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { Database, X, RefreshCw, Copy } from 'lucide-react';
+import { Database, X, RefreshCw, Copy, Check } from 'lucide-react';
 import { saveSupabaseConfig, clearSupabaseConfig, isSupabaseConfigured, resetDatabaseWithMockData } from '../services/supabaseService';
 import { useLanguage } from '../contexts/LanguageContext';
 
@@ -42,9 +42,110 @@ const ConfigModal: React.FC<ConfigModalProps> = ({ onClose }) => {
       setTimeout(() => setCopySuccess(false), 2000);
   };
 
-  const sqlCode = `-- SYSTEM UPDATE 2026.01.v4 Schema (Includes Deleted By)
-  
--- 1. ROLES & PERMISSIONS
+  const sqlCode = `-- SYSTEM REPAIR & MIGRATION SCRIPT (v3.2 - Fix Policy Conflict)
+-- Run this in Supabase SQL Editor to fix "Failed to update" errors.
+-- It safely adds missing columns and refreshes policies without errors.
+
+-- 1. ENABLE RLS & EXTENSIONS
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+
+-- 2. CREATE CORE TABLES (IF NOT EXIST)
+CREATE TABLE IF NOT EXISTS candidates (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  name TEXT NOT NULL,
+  email TEXT
+);
+
+CREATE TABLE IF NOT EXISTS job_descriptions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  title TEXT NOT NULL,
+  department TEXT,
+  content TEXT NOT NULL
+);
+
+-- 3. SAFE MIGRATION: ADD MISSING COLUMNS
+-- This block automatically fixes schema mismatches
+DO $$
+BEGIN
+    -- candidates table extensions
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'candidates' AND column_name = 'status') THEN
+        ALTER TABLE candidates ADD COLUMN status TEXT DEFAULT 'New';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'candidates' AND column_name = 'source') THEN
+        ALTER TABLE candidates ADD COLUMN source TEXT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'candidates' AND column_name = 'role_applied') THEN
+        ALTER TABLE candidates ADD COLUMN role_applied TEXT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'candidates' AND column_name = 'resume_url') THEN
+        ALTER TABLE candidates ADD COLUMN resume_url TEXT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'candidates' AND column_name = 'photo_url') THEN
+        ALTER TABLE candidates ADD COLUMN photo_url TEXT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'candidates' AND column_name = 'uploaded_by') THEN
+        ALTER TABLE candidates ADD COLUMN uploaded_by TEXT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'candidates' AND column_name = 'linkedin_url') THEN
+        ALTER TABLE candidates ADD COLUMN linkedin_url TEXT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'candidates' AND column_name = 'analysis') THEN
+        ALTER TABLE candidates ADD COLUMN analysis JSONB;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'candidates' AND column_name = 'personal_info') THEN
+        ALTER TABLE candidates ADD COLUMN personal_info JSONB;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'candidates' AND column_name = 'is_deleted') THEN
+        ALTER TABLE candidates ADD COLUMN is_deleted BOOLEAN DEFAULT FALSE;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'candidates' AND column_name = 'deleted_by') THEN
+        ALTER TABLE candidates ADD COLUMN deleted_by TEXT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'candidates' AND column_name = 'deleted_at') THEN
+        ALTER TABLE candidates ADD COLUMN deleted_at TIMESTAMP WITH TIME ZONE;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'candidates' AND column_name = 'is_unsolicited') THEN
+        ALTER TABLE candidates ADD COLUMN is_unsolicited BOOLEAN DEFAULT FALSE;
+    END IF;
+
+    -- job_descriptions table extensions
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'job_descriptions' AND column_name = 'priority') THEN
+        ALTER TABLE job_descriptions ADD COLUMN priority INTEGER DEFAULT 99;
+    END IF;
+END $$;
+
+-- 4. NEW TABLES (V3.1 Scoring & History)
+CREATE TABLE IF NOT EXISTS candidate_evaluations (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    candidate_id UUID REFERENCES candidates(id) ON DELETE CASCADE,
+    evaluation_date TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    model_version TEXT,
+    snapshot_summary JSONB, 
+    total_score NUMERIC,
+    evaluator_email TEXT
+);
+
+CREATE TABLE IF NOT EXISTS evaluation_dimensions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    evaluation_id UUID REFERENCES candidate_evaluations(id) ON DELETE CASCADE,
+    dimension_name TEXT NOT NULL,
+    weight TEXT, 
+    score NUMERIC,
+    reasoning TEXT
+);
+
+CREATE TABLE IF NOT EXISTS candidate_views (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  candidate_id UUID REFERENCES candidates(id) ON DELETE CASCADE,
+  user_email TEXT NOT NULL,
+  viewed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  UNIQUE(candidate_id, user_email)
+);
+
+-- 5. ADMIN & CONFIG TABLES
 CREATE TABLE IF NOT EXISTS app_roles (
     role_name text PRIMARY KEY,
     permissions text[] DEFAULT '{}',
@@ -59,7 +160,6 @@ VALUES
 ('USER', '{"VIEW_DASHBOARD","VIEW_LIST","AI_CHAT"}', 'General User')
 ON CONFLICT (role_name) DO NOTHING;
 
--- 2. ACCESS CONTROL (Whitelist)
 CREATE TABLE IF NOT EXISTS access_control (
     id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
     type text NOT NULL CHECK (type IN ('EMAIL', 'DOMAIN')),
@@ -68,14 +168,11 @@ CREATE TABLE IF NOT EXISTS access_control (
     created_at timestamptz DEFAULT now()
 );
 
--- Default Admin Access
+-- Default Admin
 INSERT INTO access_control (type, value, role) 
 SELECT 'EMAIL', 'robinhsu@91app.com', 'ADMIN'
-WHERE NOT EXISTS (
-    SELECT 1 FROM access_control WHERE value = 'robinhsu@91app.com'
-);
+WHERE NOT EXISTS (SELECT 1 FROM access_control WHERE value = 'robinhsu@91app.com');
 
--- 3. AUDIT LOGS
 CREATE TABLE IF NOT EXISTS action_logs (
     id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
     user_email text,
@@ -85,55 +182,18 @@ CREATE TABLE IF NOT EXISTS action_logs (
     created_at timestamptz DEFAULT now()
 );
 
--- 4. SCORING STANDARDS
 CREATE TABLE IF NOT EXISTS scoring_standards (
     id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-    category text NOT NULL, -- EXPERIENCE_CEILING, INDUSTRY_PENALTY, etc.
+    category text NOT NULL, 
     condition text,
     rule_text text NOT NULL,
+    description text,
     priority int DEFAULT 0,
     is_active boolean DEFAULT true,
     created_at timestamptz DEFAULT now()
 );
 
--- 5. CORE TABLES
-CREATE TABLE IF NOT EXISTS candidates (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  name TEXT NOT NULL,
-  email TEXT,
-  status TEXT DEFAULT 'New',
-  source TEXT,
-  role_applied TEXT,
-  resume_url TEXT,
-  photo_url TEXT,
-  uploaded_by TEXT,
-  linkedin_url TEXT,
-  analysis JSONB,
-  personal_info JSONB,
-  is_deleted BOOLEAN DEFAULT FALSE,
-  deleted_by TEXT, -- NEW: Who deleted it
-  deleted_at TIMESTAMP WITH TIME ZONE -- NEW: When it was deleted
-);
-
-CREATE TABLE IF NOT EXISTS job_descriptions (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  title TEXT NOT NULL,
-  department TEXT,
-  content TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS candidate_views (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  candidate_id UUID REFERENCES candidates(id) ON DELETE CASCADE,
-  user_email TEXT NOT NULL,
-  viewed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  UNIQUE(candidate_id, user_email)
-);
-
--- 6. RLS POLICIES (Safe Drop & Create)
+-- 6. RLS POLICIES (Refresh - Idempotent)
 ALTER TABLE candidates ENABLE ROW LEVEL SECURITY;
 ALTER TABLE job_descriptions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE candidate_views ENABLE ROW LEVEL SECURITY;
@@ -141,27 +201,36 @@ ALTER TABLE app_roles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE access_control ENABLE ROW LEVEL SECURITY;
 ALTER TABLE action_logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE scoring_standards ENABLE ROW LEVEL SECURITY;
+ALTER TABLE candidate_evaluations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE evaluation_dimensions ENABLE ROW LEVEL SECURITY;
 
-DROP POLICY IF EXISTS "Public Access" ON candidates;
-CREATE POLICY "Public Access" ON candidates FOR ALL USING (true) WITH CHECK (true);
+-- Allow all for demo purposes (Restrict in Production)
+DROP POLICY IF EXISTS "Public Access Candidates" ON candidates;
+CREATE POLICY "Public Access Candidates" ON candidates FOR ALL USING (true) WITH CHECK (true);
 
-DROP POLICY IF EXISTS "Public Access" ON job_descriptions;
-CREATE POLICY "Public Access" ON job_descriptions FOR ALL USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "Public Access JDs" ON job_descriptions;
+CREATE POLICY "Public Access JDs" ON job_descriptions FOR ALL USING (true) WITH CHECK (true);
 
-DROP POLICY IF EXISTS "Public Access" ON candidate_views;
-CREATE POLICY "Public Access" ON candidate_views FOR ALL USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "Public Access Views" ON candidate_views;
+CREATE POLICY "Public Access Views" ON candidate_views FOR ALL USING (true) WITH CHECK (true);
 
-DROP POLICY IF EXISTS "Public Access" ON app_roles;
-CREATE POLICY "Public Access" ON app_roles FOR ALL USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "Public Access Roles" ON app_roles;
+CREATE POLICY "Public Access Roles" ON app_roles FOR ALL USING (true) WITH CHECK (true);
 
-DROP POLICY IF EXISTS "Public Access" ON access_control;
-CREATE POLICY "Public Access" ON access_control FOR ALL USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "Public Access Access" ON access_control;
+CREATE POLICY "Public Access Access" ON access_control FOR ALL USING (true) WITH CHECK (true);
 
-DROP POLICY IF EXISTS "Public Access" ON action_logs;
-CREATE POLICY "Public Access" ON action_logs FOR ALL USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "Public Access Logs" ON action_logs;
+CREATE POLICY "Public Access Logs" ON action_logs FOR ALL USING (true) WITH CHECK (true);
 
-DROP POLICY IF EXISTS "Public Access" ON scoring_standards;
-CREATE POLICY "Public Access" ON scoring_standards FOR ALL USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "Public Access Standards" ON scoring_standards;
+CREATE POLICY "Public Access Standards" ON scoring_standards FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Public Access Evals" ON candidate_evaluations;
+CREATE POLICY "Public Access Evals" ON candidate_evaluations FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Public Access Dims" ON evaluation_dimensions;
+CREATE POLICY "Public Access Dims" ON evaluation_dimensions FOR ALL USING (true) WITH CHECK (true);
 `;
 
   return (
@@ -205,8 +274,14 @@ CREATE POLICY "Public Access" ON scoring_standards FOR ALL USING (true) WITH CHE
           {activeTab === 'schema' && (
               <div className="space-y-4">
                   <div className="bg-blue-50 border border-blue-100 p-4 rounded-lg text-sm text-blue-800 flex justify-between items-center">
-                      <span>Run this script in Supabase SQL Editor to create ALL tables (Candidates, Roles, Rules).</span>
-                      <button onClick={handleCopySQL} className="bg-white border border-blue-200 px-3 py-1.5 rounded-md text-blue-700 text-xs font-bold">{copySuccess ? 'Copied!' : 'Copy SQL'}</button>
+                      <div className="flex flex-col">
+                          <span className="font-bold">Database Repair Script</span>
+                          <span className="text-xs text-blue-600">Run this in Supabase SQL Editor to fix "Failed to update" errors.</span>
+                      </div>
+                      <button onClick={handleCopySQL} className="bg-white border border-blue-200 px-4 py-2 rounded-md text-blue-700 text-xs font-bold hover:bg-blue-50 flex items-center gap-1">
+                          {copySuccess ? <Check className="w-4 h-4"/> : <Copy className="w-4 h-4"/>}
+                          {copySuccess ? 'Copied!' : 'Copy SQL'}
+                      </button>
                   </div>
                   <pre className="bg-slate-800 text-slate-200 p-4 rounded-lg text-xs font-mono overflow-auto h-96 select-all">{sqlCode}</pre>
               </div>

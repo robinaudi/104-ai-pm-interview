@@ -69,8 +69,8 @@ const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
-      if (toast) {
-          const timer = setTimeout(() => setToast(null), 10000);
+      if (toast && toast.type === 'success') {
+          const timer = setTimeout(() => setToast(null), 5000); // Reduce timeout to 5s since we auto-open
           return () => clearTimeout(timer);
       }
   }, [toast]);
@@ -173,18 +173,22 @@ const App: React.FC = () => {
     setCandidates(prev => [newCandidate, ...prev]);
     setIsImportOpen(false);
     
+    // Auto-Open the new candidate
+    setSelectedCandidate(newCandidate);
+    
     // NOTE: We pass 'newCandidate' directly to toast to ensure object reference is valid
     try {
       await createCandidate(newCandidate);
       if (user) logAction(user, 'IMPORT_CANDIDATE', newCandidate.name, { id: newCandidate.id });
       setToast({ 
-          message: `${newCandidate.name} imported successfully. Click to view.`, 
+          message: `${newCandidate.name} imported successfully.`, 
           type: 'success', 
           candidate: newCandidate 
       });
     } catch (error: any) {
       setCandidates(previousCandidates);
-      setToast({ message: "Database Insert Failed.", type: 'error' });
+      console.error(error);
+      setToast({ message: `Import Failed: ${error.message || 'Check DB Schema'}`, type: 'error' });
     }
   };
 
@@ -197,9 +201,9 @@ const App: React.FC = () => {
         await softDeleteCandidate(id, user.email);
         logAction(user, 'DELETE_CANDIDATE', id);
         setToast({ message: "Candidate removed (Soft Delete).", type: 'success' });
-      } catch (error) {
+      } catch (error: any) {
         setCandidates(previousCandidates);
-        setToast({ message: "Failed to delete candidate.", type: 'error' });
+        setToast({ message: `Delete Failed: ${error.message}`, type: 'error' });
       }
     }
   };
@@ -207,8 +211,13 @@ const App: React.FC = () => {
   const handleCandidateUpdate = async (updated: Candidate) => {
     // 1. Optimistic UI update
     setCandidates(prev => prev.map(c => c.id === updated.id ? updated : c));
-    if (selectedCandidate && selectedCandidate.id === updated.id) {
+    
+    // Auto-open if it came from ImportModal's "Update" flow (duplicate resolution)
+    // We can infer this if selectedCandidate is not currently set or if we are in list view
+    if (!selectedCandidate) {
         setSelectedCandidate(updated);
+    } else if (selectedCandidate.id === updated.id) {
+        setSelectedCandidate(updated); // Refresh current view
     }
     
     // 2. DB Update
@@ -216,10 +225,10 @@ const App: React.FC = () => {
         await updateCandidate(updated);
         if (user) logAction(user, 'UPDATE_CANDIDATE', updated.name, { id: updated.id, version: 'new_upload' });
         setToast({ message: `Candidate ${updated.name} updated successfully.`, type: 'success' });
-    } catch (error) {
+    } catch (error: any) {
         console.error(error);
-        setToast({ message: "Failed to update candidate database.", type: 'error' });
-        loadData();
+        setToast({ message: `Update Failed: ${error.message || 'Check Database Connection/Schema'}`, type: 'error' });
+        // Don't reload immediately so user can see error
     }
   };
 
@@ -279,7 +288,7 @@ const App: React.FC = () => {
                     setToast(null); 
                 } 
             }}
-            className={`fixed top-24 left-1/2 transform -translate-x-1/2 z-[100] px-6 py-4 rounded-xl shadow-2xl flex items-center gap-4 animate-slide-in-top border-2 transition-transform hover:scale-105 cursor-pointer backdrop-blur-sm
+            className={`fixed top-24 left-1/2 transform -translate-x-1/2 z-[100] px-6 py-4 rounded-xl shadow-2xl flex items-center gap-4 animate-slide-in-top border-2 transition-transform hover:scale-105 cursor-pointer backdrop-blur-sm max-w-lg
             ${toast.type === 'success' ? 'bg-slate-900/95 text-white border-slate-700' : 'bg-red-600/95 text-white border-red-500'}`}
           >
               <div className={`p-2 rounded-full ${toast.type === 'success' ? 'bg-emerald-500/20' : 'bg-white/20'}`}>
@@ -287,7 +296,8 @@ const App: React.FC = () => {
               </div>
               <div>
                  <p className="font-bold text-sm">{toast.message}</p>
-                 {toast.candidate && <p className="text-xs opacity-70 mt-0.5 font-mono">Click to open profile</p>}
+                 {/* Remove "Click to view" since we auto-open, but allow click if they closed modal */}
+                 {toast.candidate && !selectedCandidate && <p className="text-xs opacity-70 mt-0.5 font-mono">Click to open profile</p>}
               </div>
               <button className="ml-2 p-1 hover:bg-white/10 rounded-full" onClick={(e) => { e.stopPropagation(); setToast(null); }}>
                  <X className="w-4 h-4 opacity-70" />

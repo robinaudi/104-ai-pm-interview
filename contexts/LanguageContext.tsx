@@ -35,6 +35,7 @@ const translations: Record<Language, Record<string, string>> = {
     aiScore: 'AI Score',
     actions: 'Actions',
     uploadedInfo: 'Upload Info', 
+    lastUpdated: 'Last Updated', // NEW
     noCandidates: 'No candidates found in this category.',
     importAnalyze: 'Import & Analyze Resume',
     targetVacancy: 'Target Vacancy / Job Role',
@@ -106,6 +107,7 @@ const translations: Record<Language, Record<string, string>> = {
     aiScore: 'AI 評分',
     actions: '操作',
     uploadedInfo: '上傳資訊', 
+    lastUpdated: '最後更新', // NEW
     noCandidates: '此類別中沒有找到候選人。',
     importAnalyze: '匯入並分析履歷',
     targetVacancy: '目標職缺 / 職位名稱',

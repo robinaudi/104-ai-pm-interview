@@ -1,10 +1,11 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { Candidate, User, JobDescription, AnalysisResult } from '../types';
-import { X, Brain, Target, Briefcase, Mail, Award, Link as LinkIcon, Building2, Calendar, User as UserIcon, Globe, ExternalLink, Filter, FileText, Phone, MapPin, GraduationCap, Edit2, Camera, Star, Code2, ScrollText, Clock, Linkedin, Quote, ClipboardPaste, Clipboard, ChevronDown, ChevronUp, Save, Check, RefreshCw, Zap, Loader2, Search, Sparkles, History, ArrowRightLeft } from 'lucide-react';
-import { RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer, Radar as RechartsRadar } from 'recharts';
+
+import React, { useState, useEffect, useMemo } from 'react';
+import { Candidate, User, JobDescription, AnalysisResult, ScoreAdjustment, ScoringStandard } from '../types';
+import { X, Brain, Briefcase, Link as LinkIcon, Building2, User as UserIcon, FileText, Code2, Linkedin, History, ArrowRightLeft, Edit2, Save, Calculator, Sparkles, MessageCircleQuestion, AlertCircle, ChevronDown, Check, Loader2, MousePointerClick, Contact } from 'lucide-react';
+import { RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer, Radar as RechartsRadar, Tooltip } from 'recharts';
 import { useLanguage } from '../contexts/LanguageContext';
-import { supabase, isSupabaseConfigured, fetchJobDescriptions, updateCandidate } from '../services/supabaseService';
-import { reEvaluateCandidate } from '../services/geminiService';
+import { isSupabaseConfigured, fetchJobDescriptions, updateCandidate, fetchScoringStandards } from '../services/supabaseService';
+import { reEvaluateCandidate, explainScoring } from '../services/geminiService';
 
 // --- Sub-components Definitions ---
 
@@ -63,6 +64,19 @@ const InfoRow104: React.FC<InfoRow104Props> = ({ label, value, isLink }) => (
   </div>
 );
 
+// --- Custom Tooltip for Radar ---
+const CustomRadarTooltip = ({ active, payload, label }: any) => {
+  if (active && payload && payload.length) {
+    return (
+      <div className="bg-slate-800 text-white text-xs p-2 rounded shadow-xl border border-slate-700">
+        <p className="font-bold mb-1">{label}</p>
+        <p className="text-emerald-400 font-mono">Score: {payload[0].value} / 10</p>
+      </div>
+    );
+  }
+  return null;
+};
+
 // --- Main Component ---
 
 interface CandidateDetailProps {
@@ -82,14 +96,28 @@ const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, o
   
   const [isReScoring, setIsReScoring] = useState(false);
   const [availableJobs, setAvailableJobs] = useState<JobDescription[]>([]);
+  const [scoringStandards, setScoringStandards] = useState<ScoringStandard[]>([]);
   
   // Job Switching State
   const [selectedJobId, setSelectedJobId] = useState<string>('');
 
+  // Editing State
+  const [editingDimension, setEditingDimension] = useState<string | null>(null);
+  const [editScore, setEditScore] = useState<number>(0);
+  const [editReason, setEditReason] = useState<string>('');
+
+  // AI Explanation State
+  const [isExplaining, setIsExplaining] = useState(false);
+  const [explanation, setExplanation] = useState<string | null>(null);
+
   useEffect(() => {
-    const loadJobs = async () => {
-        const jobs = await fetchJobDescriptions();
+    const loadData = async () => {
+        const [jobs, standards] = await Promise.all([
+            fetchJobDescriptions(),
+            fetchScoringStandards()
+        ]);
         setAvailableJobs(jobs);
+        setScoringStandards(standards);
         
         // Find matching job ID based on candidate role title
         const currentJob = jobs.find(j => j.title === candidate.roleApplied);
@@ -97,7 +125,7 @@ const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, o
             setSelectedJobId(currentJob.id);
         }
     };
-    loadJobs();
+    loadData();
   }, [candidate.roleApplied]);
 
   // Compute the displayed analysis based on selected version
@@ -131,6 +159,36 @@ const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, o
   };
   
   const finalMatchScore = normalizeScore(analysis.matchScore);
+
+  // --- MERGE V3 DIMENSIONS LOGIC ---
+  // Ensure we always have the 6 V3 dimensions, even if data is missing
+  const mergedDimensions = useMemo(() => {
+      // 1. Prefer Detailed Array if available (V3.1)
+      if (analysis.dimensionDetails && analysis.dimensionDetails.length > 0) {
+          const map: Record<string, number> = {};
+          analysis.dimensionDetails.forEach(d => map[d.dimension] = d.score);
+          return map;
+      }
+
+      // 2. Fallback to Simple Map (V3.0)
+      if (analysis.scoringDimensions) {
+          return analysis.scoringDimensions;
+      }
+
+      // 3. Fallback to defaults
+      return {};
+  }, [analysis]);
+
+  // DYNAMIC RADAR DATA
+  const radarData = useMemo(() => {
+      return Object.entries(mergedDimensions).map(([key, value]) => ({
+          subject: key,
+          A: normalizeScore(value as number),
+          fullMark: 10
+      }));
+  }, [mergedDimensions]);
+
+  // --- ACTIONS ---
 
   const handleRoleChangeAndRescore = async () => {
       const newJob = availableJobs.find(j => j.id === selectedJobId);
@@ -173,38 +231,74 @@ const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, o
       }
   };
 
-  const handleReScoreCurrent = async () => {
-    if (selectedVersionDate !== 'latest') {
-        alert("You can only re-evaluate the latest version.");
-        return;
-    }
-    if (!confirm(`Re-evaluate ${candidate.name} (Strict 0-10 Scale)?`)) return;
-    
-    setIsReScoring(true);
-    try {
-        const targetJD = availableJobs.find(j => j.title === candidate.roleApplied)?.content || `Role: ${candidate.roleApplied}`;
-        const targetLang = language === 'zh' ? 'Traditional Chinese' : 'English';
-        
-        const newAnalysis = await reEvaluateCandidate(candidate, targetJD, targetLang);
-        
-        const updatedCandidate = { 
-            ...candidate, 
-            analysis: newAnalysis,
-            updatedAt: new Date().toISOString()
-        };
+  const handleExplainScore = async () => {
+      if (explanation) { setExplanation(null); return; } // Toggle off
+      
+      // Check if we have a pre-stored explanation
+      if (analysis.scoringExplanation) {
+          setExplanation(analysis.scoringExplanation);
+          return;
+      }
 
-        if (onUpdate) onUpdate(updatedCandidate);
+      setIsExplaining(true);
+      try {
+          const job = availableJobs.find(j => j.id === selectedJobId) || { content: candidate.roleApplied };
+          const result = await explainScoring(candidate, job.content);
+          setExplanation(result);
+      } catch (e) {
+          console.error(e);
+          setExplanation("Failed to generate explanation. Check API Key.");
+      } finally {
+          setIsExplaining(false);
+      }
+  };
 
-        if (isSupabaseConfigured()) {
-            await updateCandidate(updatedCandidate);
-        }
-        alert("Re-scored successfully.");
-    } catch (e) {
-        console.error("Re-score failed", e);
-        alert("Failed to re-score.");
-    } finally {
-        setIsReScoring(false);
-    }
+  const handleSaveScoreEdit = async () => {
+      if (!editingDimension || !currentUser) return;
+      if (!editReason.trim()) { alert("Please provide a reason for the adjustment."); return; }
+
+      const oldScore = mergedDimensions[editingDimension];
+      const newDimensions = { ...mergedDimensions, [editingDimension]: editScore };
+      
+      // Update logic for V3.1 Array structure
+      let newDetails = analysis.dimensionDetails ? [...analysis.dimensionDetails] : [];
+      const detailIndex = newDetails.findIndex(d => d.dimension === editingDimension);
+      
+      if (detailIndex >= 0) {
+          newDetails[detailIndex] = { ...newDetails[detailIndex], score: editScore, reasoning: editReason };
+      } else {
+          // Add new if missing
+          newDetails.push({ dimension: editingDimension, score: editScore, weight: '15%', reasoning: editReason });
+      }
+
+      // Create Audit Log
+      const adjustment: ScoreAdjustment = {
+          dimension: editingDimension,
+          oldScore: oldScore,
+          newScore: editScore,
+          reason: editReason,
+          adjustedBy: currentUser.email,
+          adjustedAt: new Date().toISOString()
+      };
+
+      const updatedAnalysis = {
+          ...analysis,
+          scoringDimensions: newDimensions, // Keep legacy map sync
+          dimensionDetails: newDetails,     // Update new structure
+          scoreAdjustments: [adjustment, ...(analysis.scoreAdjustments || [])]
+      };
+
+      const updatedCandidate = {
+          ...candidate,
+          analysis: updatedAnalysis,
+          updatedAt: new Date().toISOString()
+      };
+
+      if (onUpdate) onUpdate(updatedCandidate);
+      if (isSupabaseConfigured()) await updateCandidate(updatedCandidate);
+
+      setEditingDimension(null);
+      setEditReason('');
   };
 
   const getValidatedLinkedinUrl = () => {
@@ -221,35 +315,6 @@ const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, o
 
   const validLinkedinUrl = getValidatedLinkedinUrl();
   const hasLinkedin = !!validLinkedinUrl;
-
-  // DYNAMIC RADAR DATA (V3 vs Legacy)
-  const radarData = useMemo(() => {
-      if (analysis.scoringDimensions) {
-          // New V3 Logic
-          return Object.entries(analysis.scoringDimensions).map(([key, value]) => ({
-              subject: key,
-              A: normalizeScore(value as number),
-              fullMark: 10
-          }));
-      }
-      
-      // Fallback Legacy Logic
-      const getForceScore = (key: string, fallbackKey?: string) => {
-          // @ts-ignore
-          let val = analysis.fiveForces?.[key];
-          // @ts-ignore
-          if ((val === undefined || val === null) && fallbackKey) val = analysis.fiveForces?.[fallbackKey];
-          return normalizeScore(val);
-      };
-
-      return [
-        { subject: 'Skills Match', A: getForceScore('skillsMatch', 'competency'), fullMark: 10 },
-        { subject: 'Experience', A: getForceScore('experience'), fullMark: 10 },
-        { subject: 'Culture Fit', A: getForceScore('cultureFit'), fullMark: 10 },
-        { subject: 'Potential', A: getForceScore('potential'), fullMark: 10 },
-        { subject: 'Communication', A: getForceScore('communication'), fullMark: 10 },
-      ];
-  }, [analysis]);
 
   const getAvatarName = () => extractedData.englishName && extractedData.englishName !== 'Unknown' ? extractedData.englishName : extractedData.name;
   const finalAvatarUrl = currentPhotoUrl || `https://ui-avatars.com/api/?name=${encodeURIComponent(getAvatarName())}&background=random&color=fff&size=200&bold=true`;
@@ -280,9 +345,20 @@ const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, o
                 <h2 className="text-xl font-bold text-slate-900">{extractedData.name}</h2>
                 {extractedData.englishName && <p className="text-sm text-slate-500 font-medium">{extractedData.englishName}</p>}
                 
-                <div className={`mt-3 inline-flex items-center px-3 py-1 rounded-full text-lg font-bold border ${getScoreColor(finalMatchScore)}`}>
-                   <span className="text-xs uppercase mr-2 opacity-70">Score</span>
-                   {finalMatchScore.toFixed(1)} <span className="text-xs opacity-50 ml-1">/ 10</span>
+                <div className={`mt-3 flex flex-col items-center gap-2`}>
+                    <div className={`inline-flex items-center px-3 py-1 rounded-full text-lg font-bold border ${getScoreColor(finalMatchScore)}`}>
+                        <span className="text-xs uppercase mr-2 opacity-70">Score</span>
+                        {finalMatchScore.toFixed(1)} <span className="text-xs opacity-50 ml-1">/ 10</span>
+                    </div>
+                    {/* Explain Button */}
+                    <button 
+                        onClick={handleExplainScore}
+                        disabled={isExplaining}
+                        className="text-xs text-blue-600 font-bold hover:underline flex items-center gap-1 bg-blue-50 px-3 py-2 rounded-full border border-blue-100 hover:bg-blue-100 transition-colors"
+                    >
+                        {isExplaining ? <Loader2 className="w-3 h-3 animate-spin"/> : <MessageCircleQuestion className="w-3 h-3"/>}
+                        {explanation ? 'Hide Analysis' : 'Why this score?'}
+                    </button>
                 </div>
             </div>
 
@@ -350,13 +426,6 @@ const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, o
                         No LinkedIn Provided
                     </div>
                 )}
-
-                {selectedVersionDate === 'latest' && !isRoleChanged && (
-                    <button onClick={handleReScoreCurrent} disabled={isReScoring} className="w-full bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-2">
-                        {isReScoring ? <Loader2 className="w-3 h-3 animate-spin"/> : <RefreshCw className="w-3 h-3"/>}
-                        Re-Evaluate (Current Role)
-                    </button>
-                )}
                 
                 {/* VERSION SELECTOR */}
                 {candidate.versions && candidate.versions.length > 0 && (
@@ -407,9 +476,56 @@ const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, o
                     </div>
                 )}
 
+                {/* AI Explanation Area */}
+                {explanation && (
+                    <div className="mb-6 bg-indigo-50 border border-indigo-200 p-6 rounded-xl animate-fade-in shadow-sm relative">
+                        <div className="flex items-start gap-3">
+                            <Sparkles className="w-6 h-6 text-indigo-500 mt-1 flex-shrink-0" />
+                            <div>
+                                <h4 className="font-bold text-indigo-900 mb-2">AI Analysis Report (v3.0)</h4>
+                                <div className="text-sm text-indigo-800 leading-relaxed whitespace-pre-line">
+                                    {explanation}
+                                </div>
+                            </div>
+                        </div>
+                        <button onClick={() => setExplanation(null)} className="absolute top-4 right-4 p-1 hover:bg-indigo-100 rounded-full text-indigo-400 hover:text-indigo-700"><X className="w-4 h-4"/></button>
+                    </div>
+                )}
+
                 {activeTab === 'analysis' && (
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-fade-in">
                         <div className="lg:col-span-2 space-y-6">
+                            
+                            {/* EVALUATION SNAPSHOT (NEW V3.1 Requirement) */}
+                            {analysis.evaluationSnapshot && (
+                                <div className="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden">
+                                    <div className="bg-slate-50 px-4 py-2 border-b border-slate-200 flex justify-between items-center">
+                                        <h4 className="text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
+                                            <Contact className="w-3 h-3"/> Evaluation Overview
+                                        </h4>
+                                        <span className="text-[10px] text-slate-400">Snapshot</span>
+                                    </div>
+                                    <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                                        <div>
+                                            <div className="text-[10px] font-bold text-slate-400 uppercase">Candidate / Age</div>
+                                            <div className="font-bold text-slate-800">{analysis.evaluationSnapshot.candidateName} / {analysis.evaluationSnapshot.birthInfo}</div>
+                                        </div>
+                                        <div>
+                                            <div className="text-[10px] font-bold text-slate-400 uppercase">Applied Role</div>
+                                            <div className="font-bold text-blue-600">{analysis.evaluationSnapshot.jobTitle}</div>
+                                        </div>
+                                        <div>
+                                            <div className="text-[10px] font-bold text-slate-400 uppercase">Stats / Level</div>
+                                            <div className="font-medium text-slate-700">{analysis.evaluationSnapshot.experienceStats}</div>
+                                        </div>
+                                        <div>
+                                            <div className="text-[10px] font-bold text-slate-400 uppercase">Key Background</div>
+                                            <div className="font-medium text-slate-700">{analysis.evaluationSnapshot.keyBackground}</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
                             {/* Summary Card */}
                             <div className="bg-white p-5 rounded-lg border border-slate-200 shadow-sm relative overflow-hidden">
                                 <div className="absolute left-0 top-0 bottom-0 w-1 bg-blue-500" />
@@ -435,52 +551,110 @@ const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, o
                         </div>
 
                         <div className="lg:col-span-1 space-y-4">
-                            <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm h-72 flex flex-col items-center justify-center">
-                                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2 w-full text-center">
-                                    {analysis.scoringDimensions ? 'Scoring Radar (V3)' : '5-Forces Radar (Legacy)'}
+                            {/* RADAR CHART */}
+                            <div 
+                                className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm h-72 flex flex-col items-center justify-center relative cursor-pointer group transition-all hover:shadow-md hover:border-blue-300"
+                                onClick={handleExplainScore}
+                                title="Click for AI Score Breakdown"
+                            >
+                                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2 w-full text-center flex items-center justify-center gap-2">
+                                    COMPETENCY MATRIX (V3.1)
+                                    <MousePointerClick className="w-3 h-3 text-blue-400 opacity-0 group-hover:opacity-100 transition-opacity"/>
                                 </h4>
                                 <div className="w-full h-full">
                                     <ResponsiveContainer width="100%" height="100%">
-                                        <RadarChart cx="50%" cy="50%" outerRadius="65%" data={radarData}>
-                                            <PolarGrid stroke="#e2e8f0" />
-                                            <PolarAngleAxis dataKey="subject" tick={{ fill: '#64748b', fontSize: 10, fontWeight: 700 }} />
-                                            <PolarRadiusAxis angle={30} domain={[0, 10]} tick={false} axisLine={false} />
-                                            <RechartsRadar dataKey="A" stroke="#3b82f6" strokeWidth={2} fill="#3b82f6" fillOpacity={0.2} />
+                                        <RadarChart cx="50%" cy="50%" outerRadius="80%" data={radarData}>
+                                            <PolarGrid gridType="polygon" stroke="#cbd5e1" strokeWidth={1} />
+                                            <PolarAngleAxis 
+                                                dataKey="subject" 
+                                                tick={{ fill: '#475569', fontSize: 10, fontWeight: 700 }} 
+                                            />
+                                            {/* Exact 0-10 Scale: tickCount 6 gives 0, 2, 4, 6, 8, 10 */}
+                                            <PolarRadiusAxis 
+                                                angle={30} 
+                                                domain={[0, 10]} 
+                                                tickCount={6} 
+                                                tick={{ fill: '#94a3b8', fontSize: 10 }} 
+                                                axisLine={false}
+                                            />
+                                            <RechartsRadar 
+                                                name="Score" 
+                                                dataKey="A" 
+                                                stroke="#2563eb" 
+                                                strokeWidth={3} 
+                                                fill="#3b82f6" 
+                                                fillOpacity={0.4} 
+                                            />
+                                            <Tooltip content={<CustomRadarTooltip />} cursor={{ stroke: '#64748b', strokeWidth: 1, strokeDasharray: '3 3' }}/>
                                         </RadarChart>
                                     </ResponsiveContainer>
                                 </div>
+                                <div className="absolute inset-0 bg-blue-50/0 group-hover:bg-blue-50/5 transition-colors rounded-lg pointer-events-none"></div>
                             </div>
                             
-                            {/* Breakdown of Dimensions for V3 */}
-                            {analysis.scoringDimensions && (
-                                <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm">
-                                    <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">Scoring Breakdown</h4>
-                                    <div className="space-y-2">
-                                        {Object.entries(analysis.scoringDimensions).map(([key, val]) => {
-                                            const score = val as number;
-                                            return (
-                                            <div key={key} className="flex justify-between items-center text-xs">
-                                                <span className="text-slate-600">{key}</span>
-                                                <span className={`font-bold ${score >= 8 ? 'text-emerald-600' : score < 6 ? 'text-red-500' : 'text-blue-600'}`}>
-                                                    {score.toFixed(1)}
-                                                </span>
-                                            </div>
-                                        )})}
-                                    </div>
-                                </div>
-                            )}
-
+                            {/* SCORING BREAKDOWN - ENHANCED V3.1 */}
                             <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm">
-                                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">Gap Analysis</h4>
+                                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3 flex justify-between items-center">
+                                    Detailed Scoring
+                                    <span className="text-[9px] bg-slate-100 px-1 rounded flex items-center gap-1"><Edit2 className="w-2 h-2"/> Click to Edit</span>
+                                </h4>
                                 <div className="space-y-3">
-                                    <div>
-                                        <div className="text-xs font-bold text-emerald-600 mb-1 flex items-center gap-1"><Check className="w-3 h-3"/> Matching</div>
-                                        <ul className="text-xs text-slate-600 list-disc pl-4 space-y-1">{analysis.gapAnalysis?.pros?.slice(0,3).map((p,i) => <li key={i}>{p}</li>)}</ul>
-                                    </div>
-                                    <div>
-                                        <div className="text-xs font-bold text-red-600 mb-1 flex items-center gap-1"><X className="w-3 h-3"/> Missing</div>
-                                        <ul className="text-xs text-slate-600 list-disc pl-4 space-y-1">{analysis.gapAnalysis?.cons?.slice(0,3).map((p,i) => <li key={i}>{p}</li>)}</ul>
-                                    </div>
+                                    {/* Prefer dimensionDetails array if available, otherwise map keys */}
+                                    {(analysis.dimensionDetails && analysis.dimensionDetails.length > 0 ? analysis.dimensionDetails : Object.entries(mergedDimensions).map(([k,v]) => ({dimension: k, score: v, weight: '', reasoning: ''}))).map((item, idx) => {
+                                        const isEditing = editingDimension === item.dimension;
+                                        return (
+                                        <div key={idx} className={`text-xs p-3 rounded border transition-colors ${isEditing ? 'bg-blue-50 border-blue-200 ring-1 ring-blue-100' : 'bg-slate-50 border-slate-100 hover:border-slate-300'}`}>
+                                            <div className="flex justify-between items-start mb-1">
+                                                <div>
+                                                    <span className="text-slate-700 font-bold block">{item.dimension}</span>
+                                                    {item.weight && <span className="text-[10px] text-slate-400 bg-white px-1 rounded border border-slate-100 inline-block mt-0.5">Weight: {item.weight}</span>}
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    <span className={`text-sm font-bold ${item.score >= 8 ? 'text-emerald-600' : item.score < 6 ? 'text-red-500' : 'text-blue-600'}`}>
+                                                        {item.score.toFixed(1)}
+                                                    </span>
+                                                    {selectedVersionDate === 'latest' && !isEditing && (
+                                                        <button onClick={() => { setEditingDimension(item.dimension); setEditScore(item.score); setEditReason(item.reasoning || ''); }} className="p-1 hover:bg-slate-200 rounded text-slate-400 hover:text-slate-600">
+                                                            <Edit2 className="w-3 h-3" />
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            </div>
+                                            
+                                            {/* Reasoning Text */}
+                                            {item.reasoning && !isEditing && (
+                                                <div className="mt-1 text-slate-600 leading-relaxed pl-2 border-l-2 border-slate-300 italic opacity-90">
+                                                    {item.reasoning}
+                                                </div>
+                                            )}
+                                            
+                                            {/* Inline Editor */}
+                                            {isEditing && (
+                                                <div className="mt-2 pt-2 border-t border-blue-200 animate-fade-in">
+                                                    <div className="flex gap-2 items-center mb-2">
+                                                        <input 
+                                                            type="number" 
+                                                            min="0" max="10" step="0.1" 
+                                                            value={editScore} 
+                                                            onChange={(e) => setEditScore(parseFloat(e.target.value))}
+                                                            className="w-16 border rounded p-1 text-center font-bold"
+                                                        />
+                                                        <input 
+                                                            type="text" 
+                                                            placeholder="Reason (Required)" 
+                                                            value={editReason}
+                                                            onChange={(e) => setEditReason(e.target.value)}
+                                                            className="flex-1 border rounded p-1 px-2 text-xs"
+                                                        />
+                                                    </div>
+                                                    <div className="flex gap-2 justify-end">
+                                                        <button onClick={() => setEditingDimension(null)} className="text-[10px] text-slate-500 hover:underline">Cancel</button>
+                                                        <button onClick={handleSaveScoreEdit} className="bg-blue-600 text-white px-3 py-1 rounded text-[10px] font-bold hover:bg-blue-700">Save</button>
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )})}
                                 </div>
                             </div>
                         </div>

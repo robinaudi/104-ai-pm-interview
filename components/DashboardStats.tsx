@@ -1,3 +1,4 @@
+
 import React, { useMemo } from 'react';
 import { Candidate, CandidateStatus } from '../types';
 import { 
@@ -158,11 +159,18 @@ const DashboardStats: React.FC<DashboardStatsProps> = ({ candidates, onFilterCli
            <h3 className="text-sm font-bold text-slate-700 uppercase tracking-wider mb-4 flex items-center gap-2"><Target className="w-4 h-4 text-blue-500" />{t('chartRadarTitle')}</h3>
            <div className="flex-1 w-full relative">
               <ResponsiveContainer width="100%" height="100%">
-                <RadarChart cx="50%" cy="50%" outerRadius="70%" data={radarData}>
-                  <PolarGrid stroke="#e2e8f0" />
+                <RadarChart cx="50%" cy="50%" outerRadius="75%" data={radarData}>
+                  <PolarGrid gridType="polygon" stroke="#cbd5e1" strokeWidth={1} />
                   <PolarAngleAxis dataKey="subject" tick={{ fill: '#64748b', fontSize: 10, fontWeight: 600 }} />
-                  <PolarRadiusAxis angle={30} domain={[0, 10]} tick={false} axisLine={false} />
-                  <Radar name="Pool Avg" dataKey="A" stroke="#3b82f6" strokeWidth={3} fill="#3b82f6" fillOpacity={0.2} />
+                  {/* Exact 0-10 Scale with Tick Count 6 (0, 2, 4, 6, 8, 10) */}
+                  <PolarRadiusAxis 
+                      angle={30} 
+                      domain={[0, 10]} 
+                      tickCount={6} 
+                      tick={{ fill: '#94a3b8', fontSize: 10 }} 
+                      axisLine={false} 
+                  />
+                  <Radar name="Pool Avg" dataKey="A" stroke="#3b82f6" strokeWidth={3} fill="#3b82f6" fillOpacity={0.3} />
                   <Tooltip contentStyle={{borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}} />
                 </RadarChart>
               </ResponsiveContainer>

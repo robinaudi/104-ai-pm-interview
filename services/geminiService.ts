@@ -61,42 +61,38 @@ const getSystemInstruction = (language: string, jdContent: string, standards: Sc
 
     return `
 You are Robin Hsu, VP of a leading SaaS company. You are known for being EXTREMELY STRICT, REALISTIC, and DATA-DRIVEN.
-You despise grade inflation. 
 
 *** 1. SCORING MATRIX (THE CORE - 100 POINTS) ***
-You must evaluate the candidate based on the following Weighted Dimensions. 
+Evaluate the candidate based on these Weighted Dimensions.
 Scores are 0-10. Weighted Sum is the Final Match Score.
 
 ${dimensionRules || '- No dimensions configured. Use general judgement.'}
 
 *** 2. EXPERIENCE CEILING (Baseline) ***
-First, calculate "Effective Relevant Years" by applying discounts:
 ${generalRules || '- No specific discount rules.'}
-Then apply ceilings:
 ${experienceRules || '- No specific experience ceilings defined.'}
 
 *** 3. INDUSTRY PENALTY ***
 ${industryRules || '- No specific industry penalties defined.'}
 
-*** 4. ACTIVE APPLICANT DETECTION ***
-Check if the resume text explicitly mentions **"主動應徵"**, **"Active Application"**, or similar phrases in the header or objective section.
-- If found -> Set "isUnsolicited" to TRUE.
-- If not found -> Set "isUnsolicited" to FALSE.
+*** 4. SNAPSHOT GENERATION (Mandatory) ***
+You must generate a specific "Evaluation Summary" (snapshot).
+- If Birth Year is missing, estimate it based on (Current Year - Age) or (Current Year - 22 - YearsOfExperience).
+- Format "Level" as: Junior (0-2y), Mid (3-5y), Senior (6-9y), Lead/Principal (10y+).
+- Key Background: Summarize top 3-4 hard skills/certs (e.g. PMP, ERP, SaaS).
 
 *** JOB DESCRIPTION ***
 ${jdContent}
 ***********************
 
-### OUTPUT STYLE (NO FLUFF) ###
+### OUTPUT STYLE ###
+- **scoringExplanation**: A concise paragraph explaining the logic.
 - **Summary**: ONE sentence.
-- **HR Advice**: 3 Bullet points ONLY.
-  1. Verdict: STRICTLY USE "Proceed to Interview" OR "Reject".
-  2. Key Risk: **If Industry Penalty OR Low Skill Relevance applied, explicitly state why.**
-  3. Key Strength.
+- **HR Advice**: 3 Bullet points.
 - **Language**: ${language}.
 
 ### DATA EXTRACTION ###
-- **English Name**: Extract accurately. If mixed with Chinese (e.g. "陳小明 (David)"), extract "David".
+- **English Name**: If mixed (e.g. "陳小明 (David)"), extract "David".
 
 You must output strictly in JSON format matching the schema.
 `;
@@ -161,12 +157,39 @@ const analysisSchema = {
     },
     summary: { type: Type.STRING },
     matchScore: { type: Type.NUMBER, description: "Final weighted score 0-10" },
-    // NEW: Dynamic Map for Scoring Dimensions
-    scoringDimensions: {
+    
+    // NEW V3.1: Detailed Evaluation Snapshot
+    evaluationSnapshot: {
         type: Type.OBJECT,
-        description: "Key-Value pair of Dimension Name and Score (0-10). Must match the dimensions provided in system instructions.",
-        properties: {}, // Allow dynamic keys
+        description: "The Evaluation Overview Snapshot",
+        properties: {
+            candidateName: { type: Type.STRING, description: "e.g. 劉元臻 (Jane)" },
+            birthInfo: { type: Type.STRING, description: "e.g. 1995 / 29歲" },
+            jobTitle: { type: Type.STRING, description: "Target Job Title" },
+            experienceStats: { type: Type.STRING, description: "e.g. 6.3 / 6.5 Years (Mid Level)" },
+            keyBackground: { type: Type.STRING, description: "e.g. PMP, ERP, SaaS..." }
+        },
+        required: ["candidateName", "birthInfo", "jobTitle", "experienceStats", "keyBackground"]
     },
+
+    // NEW V3.1: Detailed Dimensions Array (REPLACES legacy scoringDimensions map in prompt)
+    dimensionDetails: {
+        type: Type.ARRAY,
+        description: "Strict breakdown of 6 dimensions",
+        items: {
+            type: Type.OBJECT,
+            properties: {
+                dimension: { type: Type.STRING },
+                weight: { type: Type.STRING, description: "e.g. 20%" },
+                score: { type: Type.NUMBER },
+                reasoning: { type: Type.STRING, description: "Specific reason for this score" }
+            },
+            required: ["dimension", "weight", "score", "reasoning"]
+        }
+    },
+
+    scoringExplanation: { type: Type.STRING },
+    
     gapAnalysis: {
         type: Type.OBJECT,
         properties: {
@@ -199,7 +222,7 @@ const analysisSchema = {
     hrAdvice: { type: Type.STRING },
     interviewQuestions: { type: Type.ARRAY, items: { type: Type.STRING } }
   },
-  required: ["extractedData", "matchScore", "gapAnalysis", "summary", "fiveForces", "swot", "hrAdvice", "interviewQuestions"]
+  required: ["extractedData", "matchScore", "scoringExplanation", "gapAnalysis", "summary", "fiveForces", "swot", "hrAdvice", "interviewQuestions", "evaluationSnapshot", "dimensionDetails"]
 };
 
 const cleanYearsOfExperience = (input: any): number => {
@@ -308,7 +331,7 @@ export const reEvaluateCandidate = async (candidate: Candidate, jdContent: strin
             model: 'gemini-3-flash-preview',
             contents: {
                 parts: [
-                    { text: `RE-EVALUATE this candidate against the JD using STRICT Robin Hsu Scoring (0-10) with SKILL MATCH and EXPERIENCE DISCOUNT logic. Be concise. Use model version ${APP_VERSION}.` },
+                    { text: `RE-EVALUATE this candidate against the JD using STRICT Robin Hsu Scoring (0-10). GENERATE THE EVALUATION SNAPSHOT AND DIMENSION DETAILS. Use model version ${APP_VERSION}.` },
                     { text: `CANDIDATE DATA:\n${resumeTextRepresentation}` }
                 ]
             },
@@ -332,6 +355,43 @@ export const reEvaluateCandidate = async (candidate: Candidate, jdContent: strin
     }
 };
 
+// NEW: Explain Scoring (Fallback for legacy data)
+export const explainScoring = async (candidate: Candidate, jdContent: string): Promise<string> => {
+    // Check if we already have the explanation stored (Best Case)
+    if (candidate.analysis?.scoringExplanation) {
+        return candidate.analysis.scoringExplanation;
+    }
+
+    // Fallback: Generate it now (Legacy support)
+    if (!process.env.API_KEY) throw new Error("Missing API Key");
+    if (!candidate.analysis) return "No analysis available.";
+
+    const standards = await fetchScoringStandards();
+    const instruction = getSystemInstruction("Traditional Chinese", jdContent, standards);
+    
+    const context = `
+    CANDIDATE NAME: ${candidate.name}
+    CURRENT SCORES: ${JSON.stringify(candidate.analysis.scoringDimensions)}
+    TOTAL SCORE: ${candidate.analysis.matchScore}
+    
+    TASK:
+    Generate the "Analysis Rationale" paragraph that should have been created during import.
+    Explain the logic behind the scores, mentioning Experience Ceiling or Industry Penalty if applicable.
+    Keep it professional and direct.
+    `;
+
+    const chat = ai.chats.create({
+        model: 'gemini-3-flash-preview',
+        history: [
+            { role: 'user', parts: [{ text: instruction }] },
+            { role: 'model', parts: [{ text: "Understood. I am Robin Hsu's scoring engine." }] }
+        ],
+    });
+
+    const response = await chat.sendMessage({ message: context });
+    return response.text || "Could not generate explanation.";
+};
+
 const parseResponse = (text: string): AnalysisResult => {
     let cleanText = text.trim();
     if (cleanText.startsWith('```json')) {
@@ -340,7 +400,29 @@ const parseResponse = (text: string): AnalysisResult => {
         cleanText = cleanText.replace(/^```/, '').replace(/```$/, '');
     }
     
-    const parsed = JSON.parse(cleanText) as AnalysisResult;
+    const raw = JSON.parse(cleanText);
+
+    // FIX: Transform Array back to Record for scoringDimensions (Legacy UI compatibility)
+    // If AI outputs array for scoringDimensions instead of object, handle it
+    if (Array.isArray(raw.scoringDimensions)) {
+        const dimMap: Record<string, number> = {};
+        raw.scoringDimensions.forEach((item: any) => {
+            if (item.name && item.score !== undefined) {
+                dimMap[item.name] = item.score;
+            }
+        });
+        raw.scoringDimensions = dimMap;
+    } 
+    // If scoringDimensions is missing but dimensionDetails exists, polyfill it from detailed array
+    else if (!raw.scoringDimensions && raw.dimensionDetails) {
+        const dimMap: Record<string, number> = {};
+        raw.dimensionDetails.forEach((item: any) => {
+             dimMap[item.dimension] = item.score;
+        });
+        raw.scoringDimensions = dimMap;
+    }
+
+    const parsed = raw as AnalysisResult;
 
     parsed.extractedData.yearsOfExperience = cleanYearsOfExperience(parsed.extractedData.yearsOfExperience);
     parsed.extractedData.relevantYearsOfExperience = cleanYearsOfExperience(parsed.extractedData.relevantYearsOfExperience);
@@ -377,6 +459,13 @@ const parseResponse = (text: string): AnalysisResult => {
          Object.keys(parsed.scoringDimensions).forEach(k => {
             if (parsed.scoringDimensions![k] > 10) parsed.scoringDimensions![k] = parsed.scoringDimensions![k] / 10;
         });
+    }
+
+    // Sanitize dimensionDetails if present
+    if (parsed.dimensionDetails) {
+         parsed.dimensionDetails.forEach(d => {
+             if (d.score > 10) d.score = d.score / 10;
+         });
     }
 
     return parsed;

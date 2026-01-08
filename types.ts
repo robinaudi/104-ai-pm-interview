@@ -79,6 +79,32 @@ export interface ExtractedCandidateInfo {
   workExperience: WorkExperience[]; 
 }
 
+// NEW: Score Adjustment Audit Trail
+export interface ScoreAdjustment {
+    dimension: string;
+    oldScore: number;
+    newScore: number;
+    reason: string;
+    adjustedBy: string;
+    adjustedAt: string;
+}
+
+// NEW V3.1: Strict Structure for Database Persistence
+export interface EvaluationSnapshot {
+    candidateName: string; // "劉元臻 (Jane)"
+    birthInfo: string; // "1995 / 29歲"
+    jobTitle: string; // "專案經理 / Project Manager"
+    experienceStats: string; // "6.3 / 6.5 年 (Mid Level)"
+    keyBackground: string; // "PMP 認證、ERP 顧問..."
+}
+
+export interface DimensionDetail {
+    dimension: string; // "ERP/Finance Mastery"
+    weight: string; // "20%"
+    score: number; // 9.2
+    reasoning: string; // "具備深厚 ERP 顧問背景..."
+}
+
 export interface AnalysisResult {
   extractedData: ExtractedCandidateInfo; 
   summary: string;
@@ -89,8 +115,20 @@ export interface AnalysisResult {
       pros: string[];
       cons: string[]; // Missing skills based on JD
   };
-  // NEW V3: Dynamic Scoring Dimensions (Map of "Dimension Name" -> Score)
+  
+  // NEW V3.1: Explicit Structures for DB Saving
+  evaluationSnapshot?: EvaluationSnapshot;
+  dimensionDetails?: DimensionDetail[];
+
+  // DEPRECATED but kept for backward compatibility. 
+  // Should be derived from dimensionDetails in the UI.
   scoringDimensions?: Record<string, number>;
+  
+  // NEW: Stores the explicit reasoning generated at the time of analysis
+  scoringExplanation?: string;
+
+  // NEW: Audit Trail for manual edits
+  scoreAdjustments?: ScoreAdjustment[];
   
   // Legacy support for older components
   fiveForces: AnalysisFiveForces;
