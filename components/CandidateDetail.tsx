@@ -67,9 +67,10 @@ const InfoRow104: React.FC<InfoRow104Props> = ({ label, value, isLink }) => (
 // --- Custom Tooltip for Radar ---
 const CustomRadarTooltip = ({ active, payload, label }: any) => {
   if (active && payload && payload.length) {
+    const dataPoint = payload[0].payload;
     return (
-      <div className="bg-slate-800 text-white text-xs p-2 rounded shadow-xl border border-slate-700">
-        <p className="font-bold mb-1">{label}</p>
+      <div className="bg-slate-800 text-white text-xs p-2 rounded shadow-xl border border-slate-700 z-50">
+        <p className="font-bold mb-1">{dataPoint.fullSubject || label}</p>
         <p className="text-emerald-400 font-mono">Score: {payload[0].value} / 10</p>
       </div>
     );
@@ -160,32 +161,43 @@ const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, o
   
   const finalMatchScore = normalizeScore(analysis.matchScore);
 
-  // --- MERGE V3 DIMENSIONS LOGIC ---
-  // Ensure we always have the 6 V3 dimensions, even if data is missing
+  // --- MERGE V3/V4 DIMENSIONS LOGIC ---
   const mergedDimensions = useMemo(() => {
-      // 1. Prefer Detailed Array if available (V3.1)
+      // 1. Prefer Detailed Array if available (V3.1+)
       if (analysis.dimensionDetails && analysis.dimensionDetails.length > 0) {
           const map: Record<string, number> = {};
           analysis.dimensionDetails.forEach(d => map[d.dimension] = d.score);
           return map;
       }
 
-      // 2. Fallback to Simple Map (V3.0)
+      // 2. Fallback to Simple Map
       if (analysis.scoringDimensions) {
           return analysis.scoringDimensions;
       }
 
-      // 3. Fallback to defaults
       return {};
   }, [analysis]);
 
   // DYNAMIC RADAR DATA
   const radarData = useMemo(() => {
-      return Object.entries(mergedDimensions).map(([key, value]) => ({
-          subject: key,
-          A: normalizeScore(value as number),
-          fullMark: 10
-      }));
+      return Object.entries(mergedDimensions).map(([key, value]) => {
+          // Intelligent Truncation
+          let shortSubject = key;
+          if (key.length > 10) {
+              if (key.match(/^\([A-E]\)/)) {
+                  shortSubject = key.substring(0, 10) + '...';
+              } else {
+                  shortSubject = key.substring(0, 8) + '...';
+              }
+          }
+
+          return {
+              subject: shortSubject,
+              fullSubject: key,
+              A: normalizeScore(value as number),
+              fullMark: 10
+          };
+      });
   }, [mergedDimensions]);
 
   // --- ACTIONS ---
@@ -268,7 +280,7 @@ const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, o
           newDetails[detailIndex] = { ...newDetails[detailIndex], score: editScore, reasoning: editReason };
       } else {
           // Add new if missing
-          newDetails.push({ dimension: editingDimension, score: editScore, weight: '15%', reasoning: editReason });
+          newDetails.push({ dimension: editingDimension, score: editScore, weight: '', reasoning: editReason });
       }
 
       // Create Audit Log
@@ -482,7 +494,7 @@ const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, o
                         <div className="flex items-start gap-3">
                             <Sparkles className="w-6 h-6 text-indigo-500 mt-1 flex-shrink-0" />
                             <div>
-                                <h4 className="font-bold text-indigo-900 mb-2">AI Analysis Report (v3.0)</h4>
+                                <h4 className="font-bold text-indigo-900 mb-2">AI Analysis Report ({analysis.modelVersion})</h4>
                                 <div className="text-sm text-indigo-800 leading-relaxed whitespace-pre-line">
                                     {explanation}
                                 </div>
@@ -496,7 +508,7 @@ const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, o
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-fade-in">
                         <div className="lg:col-span-2 space-y-6">
                             
-                            {/* EVALUATION SNAPSHOT (NEW V3.1 Requirement) */}
+                            {/* EVALUATION SNAPSHOT */}
                             {analysis.evaluationSnapshot && (
                                 <div className="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden">
                                     <div className="bg-slate-50 px-4 py-2 border-b border-slate-200 flex justify-between items-center">
@@ -558,12 +570,12 @@ const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, o
                                 title="Click for AI Score Breakdown"
                             >
                                 <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2 w-full text-center flex items-center justify-center gap-2">
-                                    COMPETENCY MATRIX (V3.1)
+                                    COMPETENCY MATRIX (V4)
                                     <MousePointerClick className="w-3 h-3 text-blue-400 opacity-0 group-hover:opacity-100 transition-opacity"/>
                                 </h4>
                                 <div className="w-full h-full">
                                     <ResponsiveContainer width="100%" height="100%">
-                                        <RadarChart cx="50%" cy="50%" outerRadius="80%" data={radarData}>
+                                        <RadarChart cx="50%" cy="50%" outerRadius="70%" data={radarData}>
                                             <PolarGrid gridType="polygon" stroke="#cbd5e1" strokeWidth={1} />
                                             <PolarAngleAxis 
                                                 dataKey="subject" 
@@ -592,7 +604,7 @@ const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, o
                                 <div className="absolute inset-0 bg-blue-50/0 group-hover:bg-blue-50/5 transition-colors rounded-lg pointer-events-none"></div>
                             </div>
                             
-                            {/* SCORING BREAKDOWN - ENHANCED V3.1 */}
+                            {/* SCORING BREAKDOWN - ENHANCED V4 */}
                             <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm">
                                 <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3 flex justify-between items-center">
                                     Detailed Scoring

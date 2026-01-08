@@ -1,18 +1,17 @@
 
 import { Candidate, CandidateStatus, SourceType, User, UserRole, JobDescription, ScoringStandard } from './types';
 
-export const APP_VERSION = 'v3.0.0';
+export const APP_VERSION = 'v4.0.0'; // UPDATED to v4
 export const APP_NAME = 'HR Recruitment AI';
 
 export const MOCK_USER: User = {
   id: 'u-robin',
   email: 'robinhsu@91app.com',
-  role: 'ADMIN', // Changed from UserRole enum to string literal to match new RBAC
+  role: 'ADMIN', 
   permissions: ['VIEW_DASHBOARD', 'VIEW_LIST', 'EDIT_CANDIDATE', 'DELETE_CANDIDATE', 'IMPORT_DATA', 'MANAGE_ACCESS', 'MANAGE_JD', 'AI_CHAT', 'VIEW_LOGS'],
   avatarUrl: 'https://ui-avatars.com/api/?name=Robin&background=0D8ABC&color=fff'
 };
 
-// The user specific JD
 const DEFAULT_PM_JD_TEXT = `【職位名稱】專案經理 (ERP/數位轉型/AI導入)
 
 【實際的工作內容 / 關鍵任務】
@@ -47,63 +46,54 @@ export const DEFAULT_JOBS: JobDescription[] = [
 ];
 
 export const DEFAULT_SCORING_STANDARDS: ScoringStandard[] = [
-    // --- V3 SCORING DIMENSIONS (From PDF) ---
+    // --- V4 ROBIN HSU BENCHMARK (A-E) ---
     {
-        id: 'dim-1',
+        id: 'dim-v4-a',
         category: 'DIMENSION_WEIGHT',
-        condition: 'ERP/Finance Mastery',
-        rule_text: '20', // Weight %
-        description: '0: No Exp. 5: Used ERP. 10: Led Implementation. Keywords: Finance closing, Supply chain, API.',
+        condition: '(A) 產業相關性',
+        rule_text: '30', // Weight 30%
+        description: '指標: Tier 1 SaaS/OMO, 營收驅動, 高流量/跨境。滿分(30分): 91APP/EZTABLE高管。及格: 18分 (6.0)。',
         priority: 1,
         is_active: true
     },
     {
-        id: 'dim-2',
+        id: 'dim-v4-b',
         category: 'DIMENSION_WEIGHT',
-        condition: 'AI & Digital Transformation',
-        rule_text: '25', // Weight %
-        description: '0: Interest only. 5: Used ChatGPT. 10: Successful Agentic AI/LCDP project with ROI.',
+        condition: '(B) 系統導入經驗',
+        rule_text: '20', // Weight 20%
+        description: '指標: 深度(Build/Re-arch), 廣度(ERP+CRM+POS), 量化ROI。滿分(20分): 自建Social-CRM, ERP 0-1。及格: 12分 (6.0)。',
         priority: 2,
         is_active: true
     },
     {
-        id: 'dim-3',
+        id: 'dim-v4-c',
         category: 'DIMENSION_WEIGHT',
-        condition: 'PM Methodology',
-        rule_text: '15', // Weight %
-        description: '0: Chaos. 5: PMP Cert only. 10: Hybrid Agile experience. Knows when to use Waterfall vs Scrum.',
+        condition: '(C) 專案管理經驗',
+        rule_text: '20', // Weight 20%
+        description: '指標: 規模(預算/人數), 方法論(PMP+Agile), 危機處理。滿分(20分): 管30+人, 雙證照, 解決系統癱瘓。及格: 12分 (6.0)。',
         priority: 3,
         is_active: true
     },
     {
-        id: 'dim-4',
+        id: 'dim-v4-d',
         category: 'DIMENSION_WEIGHT',
-        condition: 'Communication',
-        rule_text: '20', // Weight %
-        description: '0: Solo. 5: Single Dept. 10: Cross-Dept (C-Level/RD/Ops) & Vendor Mgmt.',
+        condition: '(D) 技術量化成效',
+        rule_text: '20', // Weight 20%
+        description: '指標: 資歷(20+年/Dev背景), 證照(Full Stack), 硬指標(Speed/Cost)。滿分(20分): MCPD, AWS Cost -46%。及格: 12分 (6.0)。',
         priority: 4,
         is_active: true
     },
     {
-        id: 'dim-5',
+        id: 'dim-v4-e',
         category: 'DIMENSION_WEIGHT',
-        condition: 'Industry Relevance',
-        rule_text: '10', // Weight %
-        description: '0: None. 5: Traditional Retail/Soft. 10: SaaS / Ecommerce / OMO Background.',
+        condition: '(E) 未來就緒度',
+        rule_text: '10', // Weight 10%
+        description: '指標: AI/Low-Code實戰, 持續學習(碩士/教學)。滿分(10分): RPA Cost -80%, Copilot講師。及格: 5分 (5.0)。',
         priority: 5,
         is_active: true
     },
-    {
-        id: 'dim-6',
-        category: 'DIMENSION_WEIGHT',
-        condition: 'Education & Learning',
-        rule_text: '10', // Weight %
-        description: '0: Irrelevant. 5: Related Bachelor. 10: Master + Recent AI/Cloud Certs.',
-        priority: 6,
-        is_active: true
-    },
 
-    // --- LEGACY / GENERAL RULES ---
+    // --- LEGACY / GENERAL RULES (Retained for Experience Cap) ---
     {
         id: 'rule-exp-1',
         category: 'EXPERIENCE_CEILING',
@@ -168,7 +158,7 @@ export const MOCK_CANDIDATES: Candidate[] = [
     createdAt: '2024-05-10T09:00:00Z',
     updatedAt: '2024-05-12T10:30:00Z',
     analysis: {
-      modelVersion: 'v3.0',
+      modelVersion: 'v4.0.0',
       extractedData: {
         name: '鍾佩婷',
         englishName: 'Becky',
@@ -209,15 +199,28 @@ export const MOCK_CANDIDATES: Candidate[] = [
           pros: ['具備大型 CRM 遷移經驗', '頂尖科技業背景', '數據分析能力'],
           cons: ['缺乏 ERP 財務循環經驗', '非純 PM 出身', 'AI 實戰經驗較少']
       },
-      // V3 Structure
-      scoringDimensions: {
-          'ERP/Finance Mastery': 6.0,
-          'AI & Digital Transformation': 5.0,
-          'PM Methodology': 7.0,
-          'Communication': 8.0,
-          'Industry Relevance': 7.0,
-          'Education & Learning': 8.0
+      evaluationSnapshot: {
+          candidateName: '鍾佩婷 (Becky)',
+          birthInfo: '1995 / 29歲',
+          jobTitle: 'Project Manager',
+          experienceStats: '6.0 Years (Senior)',
+          keyBackground: 'Trend Micro, CRM Migration, SA/SD'
       },
+      // V4 Structure
+      scoringDimensions: {
+          '(A) 產業相關性': 7.0,
+          '(B) 系統導入經驗': 6.5,
+          '(C) 專案管理經驗': 7.5,
+          '(D) 技術量化成效': 6.0,
+          '(E) 未來就緒度': 5.0
+      },
+      dimensionDetails: [
+          { dimension: '(A) 產業相關性', weight: '30%', score: 7.0, reasoning: '趨勢科技為 Tier 1 軟體公司，但非純電商/SaaS OMO。' },
+          { dimension: '(B) 系統導入經驗', weight: '20%', score: 6.5, reasoning: '有 CRM 遷移經驗，但缺乏 ERP 財務/進銷存深度。' },
+          { dimension: '(C) 專案管理經驗', weight: '20%', score: 7.5, reasoning: '具備跨國溝通與流程分析能力，方法論完整。' },
+          { dimension: '(D) 技術量化成效', weight: '20%', score: 6.0, reasoning: '6年資歷，有技術背景但缺乏硬體/雲端成本優化數據。' },
+          { dimension: '(E) 未來就緒度', weight: '10%', score: 5.0, reasoning: '尚無 AI/Low-Code 實戰導入案例。' }
+      ],
       // Keep legacy for safety
       fiveForces: { 
           skillsMatch: 6.0, 

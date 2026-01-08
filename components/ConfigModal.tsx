@@ -42,9 +42,8 @@ const ConfigModal: React.FC<ConfigModalProps> = ({ onClose }) => {
       setTimeout(() => setCopySuccess(false), 2000);
   };
 
-  const sqlCode = `-- SYSTEM REPAIR & MIGRATION SCRIPT (v3.2 - Fix Policy Conflict)
--- Run this in Supabase SQL Editor to fix "Failed to update" errors.
--- It safely adds missing columns and refreshes policies without errors.
+  const sqlCode = `-- SYSTEM REPAIR & MIGRATION SCRIPT (v4.0 - Scoring Model Update)
+-- Run this in Supabase SQL Editor to apply the new V4 Schema and Scoring Rules.
 
 -- 1. ENABLE RLS & EXTENSIONS
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
@@ -67,7 +66,6 @@ CREATE TABLE IF NOT EXISTS job_descriptions (
 );
 
 -- 3. SAFE MIGRATION: ADD MISSING COLUMNS
--- This block automatically fixes schema mismatches
 DO $$
 BEGIN
     -- candidates table extensions
@@ -117,7 +115,7 @@ BEGIN
     END IF;
 END $$;
 
--- 4. NEW TABLES (V3.1 Scoring & History)
+-- 4. NEW TABLES
 CREATE TABLE IF NOT EXISTS candidate_evaluations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     candidate_id UUID REFERENCES candidates(id) ON DELETE CASCADE,
@@ -193,7 +191,15 @@ CREATE TABLE IF NOT EXISTS scoring_standards (
     created_at timestamptz DEFAULT now()
 );
 
--- 6. RLS POLICIES (Refresh - Idempotent)
+-- CRITICAL FIX: Ensure 'description' column exists in scoring_standards
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'scoring_standards' AND column_name = 'description') THEN
+        ALTER TABLE scoring_standards ADD COLUMN description TEXT;
+    END IF;
+END $$;
+
+-- 6. RLS POLICIES (Refresh)
 ALTER TABLE candidates ENABLE ROW LEVEL SECURITY;
 ALTER TABLE job_descriptions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE candidate_views ENABLE ROW LEVEL SECURITY;
@@ -204,7 +210,6 @@ ALTER TABLE scoring_standards ENABLE ROW LEVEL SECURITY;
 ALTER TABLE candidate_evaluations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE evaluation_dimensions ENABLE ROW LEVEL SECURITY;
 
--- Allow all for demo purposes (Restrict in Production)
 DROP POLICY IF EXISTS "Public Access Candidates" ON candidates;
 CREATE POLICY "Public Access Candidates" ON candidates FOR ALL USING (true) WITH CHECK (true);
 
@@ -231,6 +236,23 @@ CREATE POLICY "Public Access Evals" ON candidate_evaluations FOR ALL USING (true
 
 DROP POLICY IF EXISTS "Public Access Dims" ON evaluation_dimensions;
 CREATE POLICY "Public Access Dims" ON evaluation_dimensions FOR ALL USING (true) WITH CHECK (true);
+
+-- 7. V4 MIGRATION: UPDATE SCORING STANDARDS
+-- This block resets the scoring rules to the new V4 model (A-E)
+DELETE FROM scoring_standards WHERE category = 'DIMENSION_WEIGHT';
+
+INSERT INTO scoring_standards (category, condition, rule_text, description, priority, is_active)
+VALUES
+('DIMENSION_WEIGHT', '(A) 產業相關性', '30', '指標: Tier 1 SaaS/OMO, 營收驅動, 高流量/跨境。滿分(30分): 91APP/EZTABLE高管。及格: 18分 (6.0)。', 1, true),
+('DIMENSION_WEIGHT', '(B) 系統導入經驗', '20', '指標: 深度(Build/Re-arch), 廣度(ERP+CRM+POS), 量化ROI。滿分(20分): 自建Social-CRM, ERP 0-1。及格: 12分 (6.0)。', 2, true),
+('DIMENSION_WEIGHT', '(C) 專案管理經驗', '20', '指標: 規模(預算/人數), 方法論(PMP+Agile), 危機處理。滿分(20分): 管30+人, 雙證照, 解決系統癱瘓。及格: 12分 (6.0)。', 3, true),
+('DIMENSION_WEIGHT', '(D) 技術量化成效', '20', '指標: 資歷(20+年/Dev背景), 證照(Full Stack), 硬指標(Speed/Cost)。滿分(20分): MCPD, AWS Cost -46%。及格: 12分 (6.0)。', 4, true),
+('DIMENSION_WEIGHT', '(E) 未來就緒度', '10', '指標: AI/Low-Code實戰, 持續學習(碩士/教學)。滿分(10分): RPA Cost -80%, Copilot講師。及格: 5分 (5.0)。', 5, true);
+
+-- Add Default Experience Rules if missing
+INSERT INTO scoring_standards (category, condition, rule_text, description, priority, is_active)
+SELECT 'EXPERIENCE_CEILING', '20+ Years', 'Score 10.0 : 20+ Years. (VP/Director Level).', '', 20, true
+WHERE NOT EXISTS (SELECT 1 FROM scoring_standards WHERE category = 'EXPERIENCE_CEILING');
 `;
 
   return (
@@ -275,8 +297,8 @@ CREATE POLICY "Public Access Dims" ON evaluation_dimensions FOR ALL USING (true)
               <div className="space-y-4">
                   <div className="bg-blue-50 border border-blue-100 p-4 rounded-lg text-sm text-blue-800 flex justify-between items-center">
                       <div className="flex flex-col">
-                          <span className="font-bold">Database Repair Script</span>
-                          <span className="text-xs text-blue-600">Run this in Supabase SQL Editor to fix "Failed to update" errors.</span>
+                          <span className="font-bold">Database Update Script (v4.0)</span>
+                          <span className="text-xs text-blue-600">Run this to update your database to the new Scoring Model.</span>
                       </div>
                       <button onClick={handleCopySQL} className="bg-white border border-blue-200 px-4 py-2 rounded-md text-blue-700 text-xs font-bold hover:bg-blue-50 flex items-center gap-1">
                           {copySuccess ? <Check className="w-4 h-4"/> : <Copy className="w-4 h-4"/>}

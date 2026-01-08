@@ -28,10 +28,22 @@ const DashboardStats: React.FC<DashboardStatsProps> = ({ candidates, onFilterCli
   const totalScore = candidates.reduce((sum, c) => sum + normalize(c.analysis?.matchScore || 0), 0);
   const avgScore = total > 0 ? (totalScore / total).toFixed(1) : '0';
 
-  // 3. Culture Fit (Legacy & V3 handling)
+  // 3. Culture Fit (Try to find V4 match or fallback)
   const totalCulture = candidates.reduce((sum, c) => {
-      // Try V3 Dimension first if it exists roughly matching
-      let val = c.analysis?.scoringDimensions?.['Culture Fit'] ?? c.analysis?.scoringDimensions?.['Culture'] ?? c.analysis?.fiveForces?.cultureFit ?? 0;
+      // V4 doesn't have explicit "Culture", we can use (A) Industry or (E) Future as proxy, 
+      // or just keep using matchScore if specific dimension is missing.
+      // For dashboard consistency, let's look for "(E) 未來就緒度" as a proxy for "Soft Skills/Culture" in V4 Context
+      // Or fallback to matchScore.
+      let val = 0;
+      const dims = c.analysis?.scoringDimensions || {};
+      const dimE = Object.entries(dims).find(([k]) => k.startsWith('(E)'));
+      
+      if (dimE) {
+          val = dimE[1] as number;
+      } else {
+          // Legacy Fallback
+          val = c.analysis?.fiveForces?.cultureFit || 0;
+      }
       return sum + normalize(val);
   }, 0);
   const avgCulture = total > 0 ? (totalCulture / total).toFixed(1) : '0';
@@ -39,55 +51,52 @@ const DashboardStats: React.FC<DashboardStatsProps> = ({ candidates, onFilterCli
   // 4. Pending Action
   const pendingCount = candidates.filter(c => c.status === CandidateStatus.NEW || c.status === CandidateStatus.SCREENING).length;
 
-  // Radar Data (Aggregated)
+  // --- RADAR DATA (STRICT V4 ONLY) ---
   const radarData = useMemo(() => {
-    if (total === 0) return [];
-    
-    // Check if we have mostly V3 candidates
-    const v3Count = candidates.filter(c => c.analysis?.scoringDimensions).length;
-    
-    if (v3Count > 0) {
-        // Dynamic aggregation for V3
-        const dimSums: Record<string, number> = {};
-        let countWithDims = 0;
-        
-        candidates.forEach(c => {
-            if (c.analysis?.scoringDimensions) {
-                Object.entries(c.analysis.scoringDimensions).forEach(([key, val]) => {
-                    dimSums[key] = (dimSums[key] || 0) + normalize(val as number);
-                });
-                countWithDims++;
+    // Explicitly define the 5 buckets we want
+    const v4Buckets = [
+        { prefix: '(A)', fullLabel: '(A) 產業相關性', sum: 0, count: 0 },
+        { prefix: '(B)', fullLabel: '(B) 系統導入經驗', sum: 0, count: 0 },
+        { prefix: '(C)', fullLabel: '(C) 專案管理經驗', sum: 0, count: 0 },
+        { prefix: '(D)', fullLabel: '(D) 技術量化成效', sum: 0, count: 0 },
+        { prefix: '(E)', fullLabel: '(E) 未來就緒度', sum: 0, count: 0 },
+    ];
+
+    candidates.forEach(c => {
+        // Support both scoringDimensions object and dimensionDetails array
+        const dimsObj = c.analysis?.scoringDimensions || {};
+        const dimsArr = c.analysis?.dimensionDetails || [];
+
+        // Helper to find score for a prefix (e.g. "(A)")
+        const getScore = (prefix: string) => {
+            // 1. Try Map
+            const mapEntry = Object.entries(dimsObj).find(([k]) => k.startsWith(prefix));
+            if (mapEntry) return normalize(mapEntry[1] as number);
+            
+            // 2. Try Array
+            const arrEntry = dimsArr.find(d => d.dimension.startsWith(prefix));
+            if (arrEntry) return normalize(arrEntry.score);
+
+            return null;
+        };
+
+        v4Buckets.forEach(bucket => {
+            const score = getScore(bucket.prefix);
+            if (score !== null) {
+                bucket.sum += score;
+                bucket.count++;
             }
         });
+    });
 
-        return Object.entries(dimSums).map(([key, sum]) => ({
-            subject: key,
-            A: (sum / countWithDims).toFixed(1),
-            fullMark: 10
-        }));
-    } 
-    
-    // Fallback to Legacy Fixed 5 Forces
-    const sums = candidates.reduce((acc, c) => {
-        const f = c.analysis?.fiveForces;
-        if (!f) return acc;
-        return {
-            skillsMatch: acc.skillsMatch + normalize(f.skillsMatch),
-            experience: acc.experience + normalize(f.experience),
-            cultureFit: acc.cultureFit + normalize(f.cultureFit),
-            potential: acc.potential + normalize(f.potential),
-            communication: acc.communication + normalize(f.communication),
-        };
-    }, { skillsMatch: 0, experience: 0, cultureFit: 0, potential: 0, communication: 0 });
-
-    return [
-        { subject: 'Skills Match', A: (sums.skillsMatch / total).toFixed(1), fullMark: 10 },
-        { subject: 'Experience', A: (sums.experience / total).toFixed(1), fullMark: 10 },
-        { subject: 'Culture Fit', A: (sums.cultureFit / total).toFixed(1), fullMark: 10 },
-        { subject: 'Potential', A: (sums.potential / total).toFixed(1), fullMark: 10 },
-        { subject: 'Communication', A: (sums.communication / total).toFixed(1), fullMark: 10 },
-    ];
-  }, [candidates, total]);
+    return v4Buckets.map(b => ({
+        // Smart Truncate: "(A) 產業相關性" -> "(A) 產業.."
+        subject: b.fullLabel.length > 7 ? b.fullLabel.substring(0, 7) + '..' : b.fullLabel,
+        fullSubject: b.fullLabel,
+        A: b.count > 0 ? (b.sum / b.count).toFixed(1) : 0,
+        fullMark: 10
+    }));
+  }, [candidates]);
 
   // Chart 2: Source Distribution (NORMALIZED)
   const sourceMap: Record<string, number> = {};
@@ -117,6 +126,20 @@ const DashboardStats: React.FC<DashboardStatsProps> = ({ candidates, onFilterCli
       roleMap[role] = (roleMap[role] || 0) + 1;
   });
   const roleData = Object.entries(roleMap).map(([name, count]) => ({ name, count }));
+
+  // Custom Tooltip for Radar to show FULL name
+  const CustomRadarTooltip = ({ active, payload, label }: any) => {
+    if (active && payload && payload.length) {
+      const dataPoint = payload[0].payload; // Access the full object
+      return (
+        <div className="bg-slate-800 text-white text-xs p-2 rounded shadow-xl border border-slate-700 z-50">
+          <p className="font-bold mb-1">{dataPoint.fullSubject || label}</p>
+          <p className="text-emerald-400 font-mono">Avg: {payload[0].value} / 10</p>
+        </div>
+      );
+    }
+    return null;
+  };
 
   const StatCard = ({ title, value, icon: Icon, color, subtext, onClick, highlight }: any) => (
     <div 
@@ -148,47 +171,55 @@ const DashboardStats: React.FC<DashboardStatsProps> = ({ candidates, onFilterCli
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard title={t('kpiTopTalent')} value={topTalentCount} icon={Star} color="bg-emerald-500" subtext="High Potential" onClick={() => onFilterClick('topTalent', true)} highlight={true} />
         <StatCard title={t('kpiAvgScore')} value={avgScore} icon={TrendingUp} color="bg-blue-600" subtext="/ 10.0" />
-        <StatCard title={t('kpiCulture')} value={avgCulture} icon={Users} color="bg-purple-600" subtext="/ 10.0" />
+        <StatCard title={t('kpiCulture')} value={avgCulture} icon={Users} color="bg-purple-600" subtext="(E) Future Fit" />
         <StatCard title={t('kpiAction')} value={pendingCount} icon={Zap} color="bg-amber-500" subtext="To Review" />
       </div>
 
       {/* Charts */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Radar */}
-        <div className="lg:col-span-1 bg-white p-6 rounded-xl border border-slate-200 shadow-sm flex flex-col h-[400px]">
-           <h3 className="text-sm font-bold text-slate-700 uppercase tracking-wider mb-4 flex items-center gap-2"><Target className="w-4 h-4 text-blue-500" />{t('chartRadarTitle')}</h3>
+        <div className="lg:col-span-1 bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col h-[400px]">
+           <h3 className="text-sm font-bold text-slate-700 uppercase tracking-wider mb-2 flex items-center gap-2 px-2"><Target className="w-4 h-4 text-blue-500" />{t('chartRadarTitle')}</h3>
            <div className="flex-1 w-full relative">
               <ResponsiveContainer width="100%" height="100%">
-                <RadarChart cx="50%" cy="50%" outerRadius="75%" data={radarData}>
+                <RadarChart cx="50%" cy="50%" outerRadius="65%" data={radarData}>
                   <PolarGrid gridType="polygon" stroke="#cbd5e1" strokeWidth={1} />
-                  <PolarAngleAxis dataKey="subject" tick={{ fill: '#64748b', fontSize: 10, fontWeight: 600 }} />
-                  {/* Exact 0-10 Scale with Tick Count 6 (0, 2, 4, 6, 8, 10) */}
+                  <PolarAngleAxis 
+                    dataKey="subject" 
+                    tick={{ fill: '#64748b', fontSize: 10, fontWeight: 700 }} 
+                  />
                   <PolarRadiusAxis 
                       angle={30} 
                       domain={[0, 10]} 
                       tickCount={6} 
-                      tick={{ fill: '#94a3b8', fontSize: 10 }} 
+                      tick={{ fill: '#94a3b8', fontSize: 9 }} 
                       axisLine={false} 
                   />
                   <Radar name="Pool Avg" dataKey="A" stroke="#3b82f6" strokeWidth={3} fill="#3b82f6" fillOpacity={0.3} />
-                  <Tooltip contentStyle={{borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}} />
+                  <Tooltip content={<CustomRadarTooltip />} cursor={{ stroke: '#64748b', strokeWidth: 1, strokeDasharray: '3 3' }}/>
                 </RadarChart>
               </ResponsiveContainer>
-              <div className="absolute bottom-0 w-full text-center"><span className="text-xs text-slate-400 bg-slate-50 px-2 py-1 rounded">Scale: 0 - 10</span></div>
+              <div className="absolute bottom-2 w-full text-center"><span className="text-[10px] text-slate-400 bg-slate-50 px-2 py-1 rounded border border-slate-100">Benchmark: V4</span></div>
            </div>
         </div>
 
         {/* Roles */}
-        <div className="lg:col-span-1 bg-white p-6 rounded-xl border border-slate-200 shadow-sm flex flex-col h-[400px]">
-          <h3 className="text-sm font-bold text-slate-700 uppercase tracking-wider mb-4 flex items-center gap-2"><Users className="w-4 h-4 text-emerald-500" />{t('chartRoleTitle')}</h3>
+        <div className="lg:col-span-1 bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col h-[400px]">
+          <h3 className="text-sm font-bold text-slate-700 uppercase tracking-wider mb-2 flex items-center gap-2 px-2"><Users className="w-4 h-4 text-emerald-500" />{t('chartRoleTitle')}</h3>
           <div className="flex-1 w-full">
              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={roleData} layout="vertical" margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
+                <BarChart data={roleData} layout="vertical" margin={{ top: 5, right: 30, left: 10, bottom: 5 }}>
                     <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f1f5f9" />
                     <XAxis type="number" hide />
-                    <YAxis dataKey="name" type="category" width={100} tick={{fill: '#64748b', fontSize: 11, fontWeight: 500}} tickFormatter={(val) => val.length > 15 ? val.substring(0, 15) + '...' : val} />
+                    <YAxis 
+                        dataKey="name" 
+                        type="category" 
+                        width={110} 
+                        tick={{fill: '#64748b', fontSize: 10, fontWeight: 600}} 
+                        tickFormatter={(val) => val.length > 18 ? val.substring(0, 18) + '...' : val} 
+                    />
                     <Tooltip cursor={{fill: '#f8fafc'}} contentStyle={{borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}} />
-                    <Bar dataKey="count" radius={[0, 4, 4, 0]} barSize={24} onClick={(data: any) => { const r = data.name || (data.payload && data.payload.name); if(r) onFilterClick('role', r); }}>
+                    <Bar dataKey="count" radius={[0, 4, 4, 0]} barSize={20} onClick={(data: any) => { const r = data.name || (data.payload && data.payload.name); if(r) onFilterClick('role', r); }}>
                         {roleData.map((_, i) => <Cell key={`cell-${i}`} fill={COLORS[i % COLORS.length]} />)}
                     </Bar>
                 </BarChart>
@@ -197,8 +228,8 @@ const DashboardStats: React.FC<DashboardStatsProps> = ({ candidates, onFilterCli
         </div>
 
         {/* Source */}
-        <div className="lg:col-span-1 bg-white p-6 rounded-xl border border-slate-200 shadow-sm flex flex-col h-[400px]">
-          <h3 className="text-sm font-bold text-slate-700 uppercase tracking-wider mb-4 flex items-center gap-2"><TrendingUp className="w-4 h-4 text-amber-500" />{t('chartSourceTitle')}</h3>
+        <div className="lg:col-span-1 bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col h-[400px]">
+          <h3 className="text-sm font-bold text-slate-700 uppercase tracking-wider mb-2 flex items-center gap-2 px-2"><TrendingUp className="w-4 h-4 text-amber-500" />{t('chartSourceTitle')}</h3>
           <div className="flex-1 w-full">
             <ResponsiveContainer width="100%" height="100%">
                 <PieChart>

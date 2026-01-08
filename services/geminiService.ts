@@ -50,12 +50,13 @@ const getSystemInstruction = (language: string, jdContent: string, standards: Sc
         .map(s => `- ${s.rule_text}`)
         .join('\n');
 
-    // NEW: V3 DYNAMIC DIMENSIONS
+    // NEW V4 DYNAMIC DIMENSIONS
     const dimensionRules = standards
         .filter(s => s.category === 'DIMENSION_WEIGHT' && s.is_active)
         .sort((a, b) => a.priority - b.priority)
         .map(s => {
-            return `   - **${s.condition}** (Weight: ${s.rule_text}%): ${s.description || 'Rate 0-10'}`;
+            // Note: v4 descriptions contain "Benchmark" and "Threshold" info which is crucial for the AI
+            return `   - **${s.condition}** (Weight: ${s.rule_text}%): ${s.description}`;
         })
         .join('\n');
 
@@ -63,8 +64,12 @@ const getSystemInstruction = (language: string, jdContent: string, standards: Sc
 You are Robin Hsu, VP of a leading SaaS company. You are known for being EXTREMELY STRICT, REALISTIC, and DATA-DRIVEN.
 
 *** 1. SCORING MATRIX (THE CORE - 100 POINTS) ***
-Evaluate the candidate based on these Weighted Dimensions.
-Scores are 0-10. Weighted Sum is the Final Match Score.
+Evaluate the candidate based on these Weighted Dimensions (A-E).
+Scores are 0-10. 
+CRITICAL: Read the "Threshold" and "Benchmark" in the descriptions below. 
+- If they meet the "Threshold" criteria, score approx 6.0.
+- If they meet "Benchmark" (Perfect), score 10.0.
+- If they fail to meet Threshold, score < 6.0.
 
 ${dimensionRules || '- No dimensions configured. Use general judgement.'}
 
@@ -86,7 +91,7 @@ ${jdContent}
 ***********************
 
 ### OUTPUT STYLE ###
-- **scoringExplanation**: A concise paragraph explaining the logic.
+- **scoringExplanation**: A concise paragraph explaining the logic, especially why they hit/missed the threshold (A-E).
 - **Summary**: ONE sentence.
 - **HR Advice**: 3 Bullet points.
 - **Language**: ${language}.
@@ -175,14 +180,14 @@ const analysisSchema = {
     // NEW V3.1: Detailed Dimensions Array (REPLACES legacy scoringDimensions map in prompt)
     dimensionDetails: {
         type: Type.ARRAY,
-        description: "Strict breakdown of 6 dimensions",
+        description: "Strict breakdown of dimensions (A-E)",
         items: {
             type: Type.OBJECT,
             properties: {
-                dimension: { type: Type.STRING },
-                weight: { type: Type.STRING, description: "e.g. 20%" },
+                dimension: { type: Type.STRING, description: "Must match the defined dimensions exactly (e.g. '(A) 產業相關性')"},
+                weight: { type: Type.STRING, description: "e.g. 30%" },
                 score: { type: Type.NUMBER },
-                reasoning: { type: Type.STRING, description: "Specific reason for this score" }
+                reasoning: { type: Type.STRING, description: "Specific reason for this score against benchmark" }
             },
             required: ["dimension", "weight", "score", "reasoning"]
         }
