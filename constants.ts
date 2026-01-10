@@ -1,7 +1,7 @@
 
 import { Candidate, CandidateStatus, SourceType, User, UserRole, JobDescription, ScoringStandard } from './types';
 
-export const APP_VERSION = 'v4.0.0'; // UPDATED to v4
+export const APP_VERSION = 'v4.2.0'; // UPDATED to v4.2 Smart Scoring
 export const APP_NAME = 'HR Recruitment AI';
 
 export const MOCK_USER: User = {
@@ -93,6 +93,36 @@ export const DEFAULT_SCORING_STANDARDS: ScoringStandard[] = [
         is_active: true
     },
 
+    // --- V4.1 INDUSTRY PENALTY DEFAULTS ---
+    // The "Condition" is the Keyword, "Rule_Text" is the Multiplier
+    {
+        id: 'pen-1',
+        category: 'INDUSTRY_PENALTY',
+        condition: 'Manufacturing',
+        rule_text: '0.6',
+        description: 'Penalty for Traditional Manufacturing Background',
+        priority: 10,
+        is_active: true
+    },
+    {
+        id: 'pen-2',
+        category: 'INDUSTRY_PENALTY',
+        condition: 'Semiconductor',
+        rule_text: '0.6',
+        description: 'Penalty for Semiconductor/Foundry Background',
+        priority: 10,
+        is_active: true
+    },
+    {
+        id: 'pen-3',
+        category: 'INDUSTRY_PENALTY',
+        condition: 'Hardware',
+        rule_text: '0.6',
+        description: 'Penalty for Pure Hardware/OEM Background',
+        priority: 10,
+        is_active: true
+    },
+
     // --- LEGACY / GENERAL RULES (Retained for Experience Cap) ---
     {
         id: 'rule-exp-1',
@@ -132,14 +162,6 @@ export const DEFAULT_SCORING_STANDARDS: ScoringStandard[] = [
         condition: '0-2 Years',
         rule_text: 'Score 1.0 - 2.9 : 0-2 Years. (Junior).',
         priority: 24,
-        is_active: true
-    },
-    {
-        id: 'rule-ind-1',
-        category: 'INDUSTRY_PENALTY',
-        condition: 'Traditional Sectors',
-        rule_text: '{"competency": 0.7, "culture": 0.6}', // JSON Format
-        priority: 30,
         is_active: true
     }
 ];

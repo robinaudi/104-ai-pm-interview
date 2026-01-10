@@ -342,7 +342,17 @@ const CandidateTable: React.FC<CandidateTableProps> = ({
                     </td>
                     <td className="px-6 py-4 text-right pr-8">
                         <div className="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <button onClick={(e) => { e.stopPropagation(); onDelete(c.id); }} className="p-2 hover:bg-red-50 rounded-lg text-slate-400 hover:text-red-600 transition-colors" title="Delete">
+                            {/* ENHANCED DELETE BUTTON */}
+                            <button 
+                                onClick={(e) => { 
+                                    e.preventDefault(); 
+                                    e.stopPropagation();
+                                    e.nativeEvent.stopImmediatePropagation();
+                                    onDelete(c.id); 
+                                }} 
+                                className="p-2 bg-white border border-slate-200 hover:bg-red-50 hover:border-red-200 rounded-lg text-slate-400 hover:text-red-600 transition-all shadow-sm z-10 active:scale-95" 
+                                title="Delete Candidate"
+                            >
                                 <Trash2 className="w-4 h-4" />
                             </button>
                             <div className="p-2 text-slate-300">

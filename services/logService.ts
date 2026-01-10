@@ -1,6 +1,7 @@
 
 import { ActionLog, User } from '../types';
-import { supabase, isSupabaseConfigured } from './supabaseService';
+import { db, isSupabaseConfigured } from './supabaseService';
+import { collection, addDoc, getDocs, query, orderBy, limit } from 'firebase/firestore';
 
 // Mock in-memory logs for demo/fallback
 let localLogs: ActionLog[] = [];
@@ -40,33 +41,30 @@ export const logAction = async (user: User, action: string, target: string = '',
   localLogs.unshift(newLog);
 
   // Sync to Database if connected
-  if (isSupabaseConfigured()) {
+  if (isSupabaseConfigured() && db) {
     // Fire and forget
-    supabase.from('action_logs').insert([{
+    addDoc(collection(db, 'action_logs'), {
         action: newLog.action,
         user_email: newLog.user_email,
         target: newLog.target,
         details: newLog.details,
         created_at: newLog.created_at
-    }]).then(({ error }) => {
-      if (error) {
-          if (error.code !== '42P01') { // Ignore missing table
-              console.error('Failed to sync log to DB:', error);
-          }
-      }
+    }).catch(error => {
+          console.error('Failed to sync log to DB:', error);
     });
   }
 };
 
 export const fetchLogs = async (): Promise<ActionLog[]> => {
-  if (isSupabaseConfigured()) {
-      const { data, error } = await supabase
-        .from('action_logs')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .limit(100);
-      
-      if (!error && data) return data;
+  if (isSupabaseConfigured() && db) {
+      try {
+        const q = query(collection(db, 'action_logs'), orderBy('created_at', 'desc'), limit(100));
+        const snapshot = await getDocs(q);
+        const data = snapshot.docs.map(d => ({ ...d.data(), id: d.id } as ActionLog));
+        return data;
+      } catch (error) {
+        console.error("Error fetching logs:", error);
+      }
   }
   return localLogs;
 };

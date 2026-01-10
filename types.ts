@@ -60,6 +60,17 @@ export interface PersonalInfo {
   marriage?: string; // Optional
 }
 
+// NEW: Smart Attachment Detection
+export interface DetectedAttachment {
+    id: string;
+    name: string; // e.g. "English Resume", "Project Court 2050"
+    type: 'file_ref' | 'url_ref' | 'recommendation';
+    context: string; // e.g. "Listed in 104 Attachments section"
+    url?: string; // If it's a link
+    fileUrl?: string; // If user uploaded the actual file
+    isLinked: boolean; // True if user uploaded the file or verified the link
+}
+
 export interface ExtractedCandidateInfo {
   name: string;
   englishName: string; 
@@ -76,7 +87,8 @@ export interface ExtractedCandidateInfo {
   autobiography: string; // NEW: 104 Autobiography section
   certifications: string[]; 
   portfolio: PortfolioItem[]; 
-  workExperience: WorkExperience[]; 
+  workExperience: WorkExperience[];
+  detectedAttachments?: DetectedAttachment[]; // NEW: AI detected attachments
 }
 
 // NEW: Score Adjustment Audit Trail
@@ -168,6 +180,9 @@ export interface Candidate {
   
   // NEW: Version History
   versions?: CandidateVersion[];
+  
+  // NEW: User added attachments (linked to detected ones or new)
+  extraAttachments?: DetectedAttachment[];
 
   isDeleted?: boolean; // NEW: Soft delete flag
   deletedBy?: string; // NEW: Who deleted this candidate

@@ -66,10 +66,8 @@ const AccessControlModal: React.FC<AccessControlModalProps> = ({ onClose, curren
   const [fixingRole, setFixingRole] = useState<string | null>(null);
 
   // Industry Penalty Form
-  const [indName, setIndName] = useState('');
-  const [indComp, setIndComp] = useState('0.7');
-  const [indCult, setIndCult] = useState('0.6');
-  const [indExp, setIndExp] = useState('0.9');
+  const [indKeyword, setIndKeyword] = useState('');
+  const [indMultiplier, setIndMultiplier] = useState('0.6');
 
   // New Rule Form (Access)
   const [newRuleValue, setNewRuleValue] = useState('');
@@ -179,25 +177,21 @@ const AccessControlModal: React.FC<AccessControlModalProps> = ({ onClose, curren
 
   // --- SCORING STANDARDS HANDLERS ---
   const handleAddIndustryPenalty = async () => {
-      if (!indName) return;
+      if (!indKeyword) return;
       
-      const config = {
-          competency: parseFloat(indComp),
-          culture: parseFloat(indCult),
-          experience: parseFloat(indExp)
-      };
-
+      // Store single keyword in condition, and the multiplier in rule_text
       const newStd: ScoringStandard = {
           id: crypto.randomUUID(),
           category: 'INDUSTRY_PENALTY',
-          condition: indName,
-          rule_text: JSON.stringify(config), // Store structured config
+          condition: indKeyword,
+          rule_text: indMultiplier, 
+          description: `Penalty for ${indKeyword}`,
           priority: 10,
           is_active: true
       };
 
       setStandards([...standards, newStd]);
-      setIndName('');
+      setIndKeyword('');
       await updateScoringStandard(newStd);
   };
   
@@ -333,6 +327,8 @@ const AccessControlModal: React.FC<AccessControlModalProps> = ({ onClose, curren
       alert(`Permissions updated for ${role.role_name}`);
   };
 
+  const industryPenalties = standards.filter(s => s.category === 'INDUSTRY_PENALTY');
+
   return (
     <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-6xl h-[90vh] flex flex-col overflow-hidden animate-fade-in border border-slate-700">
@@ -450,7 +446,7 @@ const AccessControlModal: React.FC<AccessControlModalProps> = ({ onClose, curren
                 </div>
             )}
             
-            {/* --- TAB: VACANCIES --- */}
+            {/* --- TAB: VACANCIES & PENALTIES --- */}
             {activeTab === 'jds' && (
                 <div className="flex-1 overflow-y-auto p-6 space-y-6">
                      
@@ -489,31 +485,55 @@ const AccessControlModal: React.FC<AccessControlModalProps> = ({ onClose, curren
 
                   <hr className="border-slate-200 my-4" />
 
-                  {/* 2. INDUSTRY PENALTIES */}
+                  {/* 2. INDUSTRY PENALTIES (V4.1) */}
                   <ToggleSection 
-                    title={<><Scale className="w-4 h-4 text-red-500"/> Industry Negative List (Penalties)</>}
+                    title={<><Scale className="w-4 h-4 text-red-500"/> V4.1 Industry Penalty Protocol (Blacklist)</>}
                     isExpanded={expandedSection === 'penalties'}
                     onToggle={() => setExpandedSection(expandedSection === 'penalties' ? null : 'penalties')}
                   >
-                      <div className="bg-slate-50 p-4 rounded-lg border border-slate-200 mb-4">
-                           <div className="grid grid-cols-5 gap-3 items-end">
-                               <div className="col-span-2">
-                                   <label className="text-[10px] font-bold text-slate-500 uppercase">Industry Name</label>
-                                   <input type="text" value={indName} onChange={e => setIndName(e.target.value)} className="w-full border p-2 rounded text-sm" placeholder="e.g. Banking" />
+                      <div className="bg-red-50 p-4 rounded-lg border border-red-100 mb-4">
+                           <div className="flex gap-4 items-end">
+                               <div className="flex-1">
+                                   <label className="text-[10px] font-bold text-red-700 uppercase">Blacklisted Industry Keyword</label>
+                                   <input 
+                                     type="text" 
+                                     value={indKeyword} 
+                                     onChange={e => setIndKeyword(e.target.value)} 
+                                     className="w-full border border-red-200 p-2 rounded text-sm mt-1 focus:ring-2 focus:ring-red-200 outline-none" 
+                                     placeholder="e.g. Manufacturing, Hardware, Semiconductor" 
+                                   />
                                </div>
-                               <div>
-                                   <label className="text-[10px] font-bold text-slate-500 uppercase">Competency x</label>
-                                   <input type="number" step="0.1" value={indComp} onChange={e => setIndComp(e.target.value)} className="w-full border p-2 rounded text-sm text-center" />
+                               <div className="w-32">
+                                   <label className="text-[10px] font-bold text-red-700 uppercase">Multiplier</label>
+                                   <input 
+                                     type="number" 
+                                     step="0.1" 
+                                     value={indMultiplier} 
+                                     onChange={e => setIndMultiplier(e.target.value)} 
+                                     className="w-full border border-red-200 p-2 rounded text-sm text-center mt-1" 
+                                   />
                                </div>
-                               <div>
-                                   <label className="text-[10px] font-bold text-slate-500 uppercase">Culture x</label>
-                                   <input type="number" step="0.1" value={indCult} onChange={e => setIndCult(e.target.value)} className="w-full border p-2 rounded text-sm text-center" />
-                               </div>
-                               <button onClick={handleAddIndustryPenalty} className="bg-red-600 text-white p-2 rounded text-sm font-bold hover:bg-red-700">Add Rule</button>
+                               <button onClick={handleAddIndustryPenalty} className="bg-red-600 text-white px-4 py-2 rounded text-sm font-bold hover:bg-red-700 h-[38px] flex items-center gap-1">
+                                   <Plus className="w-4 h-4"/> Add Rule
+                               </button>
                            </div>
+                           <p className="text-[10px] text-red-600 mt-2 font-medium">
+                               * V4.1 Logic: If candidate industry matches, Dimensions A, B, C, D will be multiplied by this factor. Dimension E (Future Readiness) is EXCLUDED from penalty.
+                           </p>
                       </div>
                       
-                      {/* List existing penalties... (keeping it simple for now) */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                           {industryPenalties.map(p => (
+                               <div key={p.id} className="bg-white border border-slate-200 p-3 rounded-lg flex items-center justify-between shadow-sm group">
+                                   <div>
+                                       <div className="font-bold text-slate-800">{p.condition}</div>
+                                       <div className="text-xs text-red-500 font-mono font-bold">Multiplier: {p.rule_text}x</div>
+                                   </div>
+                                   <button onClick={() => handleDeleteStandard(p.id)} className="p-1.5 bg-slate-50 text-slate-400 hover:text-red-500 rounded transition-colors"><Trash2 className="w-4 h-4"/></button>
+                               </div>
+                           ))}
+                           {industryPenalties.length === 0 && <div className="text-slate-400 text-xs italic p-2">No active penalties.</div>}
+                      </div>
                   </ToggleSection>
 
                   {/* 3. DATA CLEAN UP TOOL */}

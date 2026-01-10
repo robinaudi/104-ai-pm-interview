@@ -1,11 +1,12 @@
 
-import React, { useState, useEffect, useMemo } from 'react';
-import { Candidate, User, JobDescription, AnalysisResult, ScoreAdjustment, ScoringStandard } from '../types';
-import { X, Brain, Briefcase, Link as LinkIcon, Building2, User as UserIcon, FileText, Code2, Linkedin, History, ArrowRightLeft, Edit2, Save, Calculator, Sparkles, MessageCircleQuestion, AlertCircle, ChevronDown, Check, Loader2, MousePointerClick, Contact } from 'lucide-react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { Candidate, User, JobDescription, AnalysisResult, ScoreAdjustment, ScoringStandard, DetectedAttachment } from '../types';
+import { X, Brain, Briefcase, Link as LinkIcon, Building2, User as UserIcon, FileText, Code2, Linkedin, History, ArrowRightLeft, Edit2, Save, Calculator, Sparkles, MessageCircleQuestion, AlertCircle, ChevronDown, Check, Loader2, MousePointerClick, Contact, RefreshCw, Paperclip, Upload, Eye, ExternalLink, Globe, File, Plus } from 'lucide-react';
 import { RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer, Radar as RechartsRadar, Tooltip } from 'recharts';
 import { useLanguage } from '../contexts/LanguageContext';
 import { isSupabaseConfigured, fetchJobDescriptions, updateCandidate, fetchScoringStandards } from '../services/supabaseService';
 import { reEvaluateCandidate, explainScoring } from '../services/geminiService';
+import { APP_VERSION } from '../constants';
 
 // --- Sub-components Definitions ---
 
@@ -64,6 +65,28 @@ const InfoRow104: React.FC<InfoRow104Props> = ({ label, value, isLink }) => (
   </div>
 );
 
+// --- Processing Overlay Component ---
+const ProcessingOverlay = ({ status }: { status: string }) => (
+    <div className="absolute inset-0 bg-white/95 backdrop-blur-md z-50 flex flex-col items-center justify-center animate-fade-in rounded-xl">
+        <div className="relative mb-6">
+            <div className="w-20 h-20 border-4 border-slate-100 rounded-full"></div>
+            <div className="absolute top-0 left-0 w-20 h-20 border-4 border-blue-600 rounded-full border-t-transparent animate-spin"></div>
+            <div className="absolute inset-0 flex items-center justify-center">
+                <Brain className="w-8 h-8 text-blue-600 animate-pulse"/>
+            </div>
+        </div>
+        <h3 className="text-xl font-bold text-slate-800 mb-2">AI Processing</h3>
+        <p className="text-sm text-slate-500 font-medium animate-pulse">{status}</p>
+        
+        {/* Fake Progress Steps */}
+        <div className="mt-8 flex gap-2">
+            <div className="w-2 h-2 rounded-full bg-blue-600 animate-bounce" style={{animationDelay: '0ms'}}></div>
+            <div className="w-2 h-2 rounded-full bg-blue-600 animate-bounce" style={{animationDelay: '150ms'}}></div>
+            <div className="w-2 h-2 rounded-full bg-blue-600 animate-bounce" style={{animationDelay: '300ms'}}></div>
+        </div>
+    </div>
+);
+
 // --- Custom Tooltip for Radar ---
 const CustomRadarTooltip = ({ active, payload, label }: any) => {
   if (active && payload && payload.length) {
@@ -89,13 +112,15 @@ interface CandidateDetailProps {
 
 const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, onUpdate, currentUser }) => {
   const { t, language } = useLanguage();
-  const [activeTab, setActiveTab] = useState<'analysis' | 'experience' | 'info'>('analysis'); 
+  const [activeTab, setActiveTab] = useState<'analysis' | 'experience' | 'info' | 'sources'>('analysis'); 
   const [currentPhotoUrl, setCurrentPhotoUrl] = useState(candidate.photoUrl);
   
   // Versioning State
   const [selectedVersionDate, setSelectedVersionDate] = useState<string>('latest');
   
   const [isReScoring, setIsReScoring] = useState(false);
+  const [reScoreStatus, setReScoreStatus] = useState('Initializing...'); // For the overlay
+  
   const [availableJobs, setAvailableJobs] = useState<JobDescription[]>([]);
   const [scoringStandards, setScoringStandards] = useState<ScoringStandard[]>([]);
   
@@ -110,6 +135,9 @@ const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, o
   // AI Explanation State
   const [isExplaining, setIsExplaining] = useState(false);
   const [explanation, setExplanation] = useState<string | null>(null);
+
+  // Attachments State
+  const [detectedItems, setDetectedItems] = useState<DetectedAttachment[]>([]);
 
   useEffect(() => {
     const loadData = async () => {
@@ -151,6 +179,20 @@ const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, o
   }, [candidate, selectedVersionDate]);
 
   const analysis = displayedData.analysis;
+  
+  // Update Detected items when analysis changes
+  useEffect(() => {
+      if (analysis?.extractedData?.detectedAttachments) {
+          const aiDetected = analysis.extractedData.detectedAttachments.map((item: any) => ({
+              ...item,
+              id: item.id || crypto.randomUUID(), // Ensure ID
+              isLinked: !!item.fileUrl
+          }));
+          const merged = [...aiDetected, ...(candidate.extraAttachments || [])];
+          setDetectedItems(merged);
+      }
+  }, [analysis, candidate.extraAttachments]);
+
   if (!analysis) return null;
   const { extractedData } = analysis;
   
@@ -161,55 +203,111 @@ const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, o
   
   const finalMatchScore = normalizeScore(analysis.matchScore);
 
-  // --- MERGE V3/V4 DIMENSIONS LOGIC ---
-  const mergedDimensions = useMemo(() => {
-      // 1. Prefer Detailed Array if available (V3.1+)
-      if (analysis.dimensionDetails && analysis.dimensionDetails.length > 0) {
-          const map: Record<string, number> = {};
-          analysis.dimensionDetails.forEach(d => map[d.dimension] = d.score);
-          return map;
-      }
+  // --- STRICT V4 DIMENSIONS LOGIC ---
+  const V4_AXES = [
+      { prefix: '(A)', label: '(A) 產業相關性', defaultWeight: '30%' },
+      { prefix: '(B)', label: '(B) 系統導入經驗', defaultWeight: '20%' },
+      { prefix: '(C)', label: '(C) 專案管理經驗', defaultWeight: '20%' },
+      { prefix: '(D)', label: '(D) 技術量化成效', defaultWeight: '20%' },
+      { prefix: '(E)', label: '(E) 未來就緒度', defaultWeight: '10%' }
+  ];
 
-      // 2. Fallback to Simple Map
-      if (analysis.scoringDimensions) {
-          return analysis.scoringDimensions;
-      }
+  const processedDimensions = useMemo(() => {
+      const detailsArray = analysis.dimensionDetails || [];
+      const dimensionsMap = analysis.scoringDimensions || {};
 
-      return {};
+      const findData = (prefix: string) => {
+          const inArray = detailsArray.find(d => d.dimension.startsWith(prefix));
+          if (inArray) return { score: inArray.score, reason: inArray.reasoning, weight: inArray.weight };
+          const keyInMap = Object.keys(dimensionsMap).find(k => k.startsWith(prefix));
+          if (keyInMap) return { score: dimensionsMap[keyInMap], reason: '', weight: '' };
+          return null;
+      };
+
+      return V4_AXES.map(axis => {
+          const data = findData(axis.prefix);
+          return {
+              dimension: axis.label,
+              score: data ? normalizeScore(data.score) : 0, 
+              reasoning: data?.reason || (analysis.modelVersion?.includes('v4') ? 'No data' : 'Legacy Data - Re-score required'),
+              weight: data?.weight || axis.defaultWeight
+          };
+      });
   }, [analysis]);
 
-  // DYNAMIC RADAR DATA
   const radarData = useMemo(() => {
-      return Object.entries(mergedDimensions).map(([key, value]) => {
-          // Intelligent Truncation
-          let shortSubject = key;
-          if (key.length > 10) {
-              if (key.match(/^\([A-E]\)/)) {
-                  shortSubject = key.substring(0, 10) + '...';
+      return processedDimensions.map(d => {
+          let shortSubject = d.dimension;
+          if (d.dimension.length > 10) {
+              if (d.dimension.match(/^\([A-E]\)/)) {
+                  shortSubject = d.dimension.substring(0, 10) + '..';
               } else {
-                  shortSubject = key.substring(0, 8) + '...';
+                  shortSubject = d.dimension.substring(0, 8) + '..';
               }
           }
-
           return {
               subject: shortSubject,
-              fullSubject: key,
-              A: normalizeScore(value as number),
+              fullSubject: d.dimension,
+              A: d.score,
               fullMark: 10
           };
       });
-  }, [mergedDimensions]);
+  }, [processedDimensions]);
 
   // --- ACTIONS ---
+
+  const handleForceRescore = async () => {
+      const currentJob = availableJobs.find(j => j.id === selectedJobId) || { content: candidate.roleApplied };
+      
+      // REMOVED: Native confirm to provide instant feedback via UI
+      setIsReScoring(true);
+      setReScoreStatus('Initializing AI Model...');
+      
+      try {
+          const targetLang = language === 'zh' ? 'Traditional Chinese' : 'English';
+          
+          // Simulate progress steps for UX
+          setTimeout(() => setReScoreStatus('Analyzing Resume Content...'), 1000);
+          setTimeout(() => setReScoreStatus(`Applying ${APP_VERSION} Scoring Logic...`), 2500);
+          setTimeout(() => setReScoreStatus('Checking Industry Penalties...'), 4000);
+          
+          const newAnalysis = await reEvaluateCandidate(candidate, currentJob.content, targetLang);
+          
+          setReScoreStatus('Finalizing & Saving...');
+          
+          const updatedCandidate = { 
+              ...candidate, 
+              analysis: newAnalysis, 
+              updatedAt: new Date().toISOString()
+          };
+
+          if (onUpdate) onUpdate(updatedCandidate);
+          if (isSupabaseConfigured()) await updateCandidate(updatedCandidate);
+          
+          // Keep success message briefly
+          setReScoreStatus('Success!');
+          await new Promise(r => setTimeout(r, 800));
+
+      } catch (e) {
+          console.error("Force Re-score failed", e);
+          alert("Failed to re-score. Please check your connection.");
+      } finally {
+          setIsReScoring(false);
+      }
+  };
 
   const handleRoleChangeAndRescore = async () => {
       const newJob = availableJobs.find(j => j.id === selectedJobId);
       if (!newJob) return;
-      if (!confirm(`Confirm change role to "${newJob.title}" and Re-Analyze?\nThis will overwrite the current analysis.`)) return;
-
+      
+      // REMOVED: Native confirm
       setIsReScoring(true);
+      setReScoreStatus(`Switching Role to ${newJob.title}...`);
+
       try {
           const targetLang = language === 'zh' ? 'Traditional Chinese' : 'English';
+          setTimeout(() => setReScoreStatus('Re-Evaluating against new JD...'), 1500);
+
           const newAnalysis = await reEvaluateCandidate(candidate, newJob.content, targetLang);
           
           const historyEntry = {
@@ -228,11 +326,10 @@ const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, o
           };
 
           if (onUpdate) onUpdate(updatedCandidate);
-
-          if (isSupabaseConfigured()) {
-              await updateCandidate(updatedCandidate);
-          }
-          alert(`Role updated to ${newJob.title} and re-scored successfully.`);
+          if (isSupabaseConfigured()) await updateCandidate(updatedCandidate);
+          
+          setReScoreStatus('Role Updated Successfully!');
+          await new Promise(r => setTimeout(r, 800));
           setSelectedVersionDate('latest');
 
       } catch (e) {
@@ -244,13 +341,8 @@ const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, o
   };
 
   const handleExplainScore = async () => {
-      if (explanation) { setExplanation(null); return; } // Toggle off
-      
-      // Check if we have a pre-stored explanation
-      if (analysis.scoringExplanation) {
-          setExplanation(analysis.scoringExplanation);
-          return;
-      }
+      if (explanation) { setExplanation(null); return; }
+      if (analysis.scoringExplanation) { setExplanation(analysis.scoringExplanation); return; }
 
       setIsExplaining(true);
       try {
@@ -269,24 +361,20 @@ const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, o
       if (!editingDimension || !currentUser) return;
       if (!editReason.trim()) { alert("Please provide a reason for the adjustment."); return; }
 
-      const oldScore = mergedDimensions[editingDimension];
-      const newDimensions = { ...mergedDimensions, [editingDimension]: editScore };
-      
-      // Update logic for V3.1 Array structure
       let newDetails = analysis.dimensionDetails ? [...analysis.dimensionDetails] : [];
-      const detailIndex = newDetails.findIndex(d => d.dimension === editingDimension);
-      
-      if (detailIndex >= 0) {
-          newDetails[detailIndex] = { ...newDetails[detailIndex], score: editScore, reasoning: editReason };
+      const existingIdx = newDetails.findIndex(d => d.dimension === editingDimension);
+      if (existingIdx >= 0) {
+          newDetails[existingIdx] = { ...newDetails[existingIdx], score: editScore, reasoning: editReason };
       } else {
-          // Add new if missing
           newDetails.push({ dimension: editingDimension, score: editScore, weight: '', reasoning: editReason });
       }
 
-      // Create Audit Log
+      const newMap = { ...(analysis.scoringDimensions || {}) };
+      newMap[editingDimension] = editScore;
+
       const adjustment: ScoreAdjustment = {
           dimension: editingDimension,
-          oldScore: oldScore,
+          oldScore: processedDimensions.find(d => d.dimension === editingDimension)?.score || 0,
           newScore: editScore,
           reason: editReason,
           adjustedBy: currentUser.email,
@@ -295,8 +383,8 @@ const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, o
 
       const updatedAnalysis = {
           ...analysis,
-          scoringDimensions: newDimensions, // Keep legacy map sync
-          dimensionDetails: newDetails,     // Update new structure
+          scoringDimensions: newMap,
+          dimensionDetails: newDetails,
           scoreAdjustments: [adjustment, ...(analysis.scoreAdjustments || [])]
       };
 
@@ -311,6 +399,33 @@ const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, o
 
       setEditingDimension(null);
       setEditReason('');
+  };
+
+  // --- ATTACHMENT HANDLING ---
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, itemId?: string) => {
+      if (e.target.files && e.target.files[0]) {
+          const file = e.target.files[0];
+          const fileUrl = URL.createObjectURL(file); // Temporary blob URL for now
+          
+          if (itemId) {
+              setDetectedItems(prev => prev.map(item => item.id === itemId ? { ...item, fileUrl, isLinked: true } : item));
+          } else {
+              const newItem: DetectedAttachment = {
+                  id: crypto.randomUUID(),
+                  name: file.name,
+                  type: 'file_ref',
+                  context: 'User Upload',
+                  fileUrl,
+                  isLinked: true
+              };
+              setDetectedItems(prev => [...prev, newItem]);
+          }
+          
+          if (onUpdate) {
+              const updatedExtra = [...(candidate.extraAttachments || []), { id: itemId || crypto.randomUUID(), name: file.name, type: 'file_ref', context: 'User Upload', fileUrl, isLinked: true } as DetectedAttachment];
+              onUpdate({...candidate, extraAttachments: updatedExtra});
+          }
+      }
   };
 
   const getValidatedLinkedinUrl = () => {
@@ -346,6 +461,9 @@ const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, o
     <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 overflow-y-auto flex items-center justify-center p-4">
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-[95vw] xl:max-w-[90vw] h-[90vh] flex overflow-hidden relative border border-slate-200">
         
+        {/* NEW: BLOCKING OVERLAY FOR RE-SCORE */}
+        {isReScoring && <ProcessingOverlay status={reScoreStatus} />}
+
         <button onClick={onClose} className="absolute top-4 right-4 z-20 p-2 bg-white/80 hover:bg-white rounded-full text-slate-500 hover:text-slate-800 transition-colors shadow-sm"><X className="w-5 h-5" /></button>
 
         {/* SIDEBAR */}
@@ -362,11 +480,22 @@ const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, o
                         <span className="text-xs uppercase mr-2 opacity-70">Score</span>
                         {finalMatchScore.toFixed(1)} <span className="text-xs opacity-50 ml-1">/ 10</span>
                     </div>
-                    {/* Explain Button */}
+
+                    {selectedVersionDate === 'latest' && (
+                        <button 
+                            onClick={handleForceRescore}
+                            disabled={isReScoring}
+                            className="w-full bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold py-3 rounded-lg flex items-center justify-center gap-2 transition-all shadow-md mt-1 mb-1 border border-slate-700 hover:scale-[1.02]"
+                        >
+                            {isReScoring ? <Loader2 className="w-4 h-4 animate-spin"/> : <RefreshCw className="w-4 h-4"/>}
+                            {isReScoring ? 'Processing...' : `Re-Score (${APP_VERSION})`}
+                        </button>
+                    )}
+
                     <button 
                         onClick={handleExplainScore}
                         disabled={isExplaining}
-                        className="text-xs text-blue-600 font-bold hover:underline flex items-center gap-1 bg-blue-50 px-3 py-2 rounded-full border border-blue-100 hover:bg-blue-100 transition-colors"
+                        className="text-xs text-blue-600 font-bold hover:underline flex items-center gap-1 bg-blue-50 px-3 py-2 rounded-full border border-blue-100 hover:bg-blue-100 transition-colors w-full justify-center"
                     >
                         {isExplaining ? <Loader2 className="w-3 h-3 animate-spin"/> : <MessageCircleQuestion className="w-3 h-3"/>}
                         {explanation ? 'Hide Analysis' : 'Why this score?'}
@@ -374,7 +503,6 @@ const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, o
                 </div>
             </div>
 
-            {/* --- JOB ROLE SELECTOR & SWITCHER --- */}
             {selectedVersionDate === 'latest' && (
                 <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm">
                     <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 flex items-center gap-1">
@@ -393,13 +521,11 @@ const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, o
                         </select>
                         <ChevronDown className="absolute right-3 top-2.5 w-4 h-4 text-slate-400 pointer-events-none" />
                     </div>
-                    
-                    {/* Show Button only if role is different */}
                     {isRoleChanged && (
                         <button 
                             onClick={handleRoleChangeAndRescore}
                             disabled={isReScoring}
-                            className="mt-3 w-full bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold py-2 rounded-lg flex items-center justify-center gap-2 animate-fade-in shadow-md transition-all"
+                            className="mt-3 w-full bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold py-2 rounded-lg flex items-center justify-center gap-2 animate-fade-in shadow-md transition-all hover:scale-[1.02]"
                         >
                             {isReScoring ? <Loader2 className="w-3 h-3 animate-spin"/> : <ArrowRightLeft className="w-3 h-3" />}
                             Switch & Re-Analyze
@@ -408,26 +534,14 @@ const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, o
                 </div>
             )}
 
-            <div className="flex flex-col gap-2 text-sm">
-                <div className="flex justify-between border-b pb-2">
-                    <span className="text-slate-400">Total Exp</span>
-                    <span className="font-semibold text-slate-700">{extractedData.yearsOfExperience} Yrs</span>
-                </div>
-                <div className="flex justify-between border-b pb-2">
-                    <span className="text-slate-400">Relevant Exp</span>
-                    <span className="font-bold text-blue-600">{extractedData.relevantYearsOfExperience ?? extractedData.yearsOfExperience} Yrs</span>
-                </div>
-            </div>
-
-            {/* ACTION BUTTONS */}
             <div className="space-y-3">
+                {/* ... (Rest of sidebar unchanged) */}
                 {hasLinkedin ? (
                     <a 
                         href={validLinkedinUrl!} 
                         target="_blank" 
                         rel="noopener noreferrer"
                         className="flex items-center justify-center gap-2 w-full bg-[#0a66c2] hover:bg-[#004182] text-white py-2.5 rounded-lg font-medium transition-colors shadow-sm"
-                        title={validLinkedinUrl!}
                     >
                         <Linkedin className="w-4 h-4" />
                         View on LinkedIn
@@ -439,7 +553,6 @@ const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, o
                     </div>
                 )}
                 
-                {/* VERSION SELECTOR */}
                 {candidate.versions && candidate.versions.length > 0 && (
                     <div className="relative pt-2 border-t border-slate-100">
                         <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">Version History</label>
@@ -467,6 +580,9 @@ const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, o
                 <div className="flex gap-8">
                     <button onClick={() => setActiveTab('analysis')} className={`pb-4 text-sm font-bold border-b-2 transition-colors flex items-center gap-2 ${activeTab === 'analysis' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
                         <Brain className="w-4 h-4" /> AI Analysis
+                    </button>
+                    <button onClick={() => setActiveTab('sources')} className={`pb-4 text-sm font-bold border-b-2 transition-colors flex items-center gap-2 ${activeTab === 'sources' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
+                        <Paperclip className="w-4 h-4" /> Sources ({detectedItems.length + 1})
                     </button>
                     <button onClick={() => setActiveTab('experience')} className={`pb-4 text-sm font-bold border-b-2 transition-colors flex items-center gap-2 ${activeTab === 'experience' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
                         <Briefcase className="w-4 h-4" /> Work Experience
@@ -581,7 +697,6 @@ const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, o
                                                 dataKey="subject" 
                                                 tick={{ fill: '#475569', fontSize: 10, fontWeight: 700 }} 
                                             />
-                                            {/* Exact 0-10 Scale: tickCount 6 gives 0, 2, 4, 6, 8, 10 */}
                                             <PolarRadiusAxis 
                                                 angle={30} 
                                                 domain={[0, 10]} 
@@ -611,8 +726,7 @@ const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, o
                                     <span className="text-[9px] bg-slate-100 px-1 rounded flex items-center gap-1"><Edit2 className="w-2 h-2"/> Click to Edit</span>
                                 </h4>
                                 <div className="space-y-3">
-                                    {/* Prefer dimensionDetails array if available, otherwise map keys */}
-                                    {(analysis.dimensionDetails && analysis.dimensionDetails.length > 0 ? analysis.dimensionDetails : Object.entries(mergedDimensions).map(([k,v]) => ({dimension: k, score: v, weight: '', reasoning: ''}))).map((item, idx) => {
+                                    {processedDimensions.map((item, idx) => {
                                         const isEditing = editingDimension === item.dimension;
                                         return (
                                         <div key={idx} className={`text-xs p-3 rounded border transition-colors ${isEditing ? 'bg-blue-50 border-blue-200 ring-1 ring-blue-100' : 'bg-slate-50 border-slate-100 hover:border-slate-300'}`}>
@@ -632,15 +746,11 @@ const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, o
                                                     )}
                                                 </div>
                                             </div>
-                                            
-                                            {/* Reasoning Text */}
                                             {item.reasoning && !isEditing && (
                                                 <div className="mt-1 text-slate-600 leading-relaxed pl-2 border-l-2 border-slate-300 italic opacity-90">
                                                     {item.reasoning}
                                                 </div>
                                             )}
-                                            
-                                            {/* Inline Editor */}
                                             {isEditing && (
                                                 <div className="mt-2 pt-2 border-t border-blue-200 animate-fade-in">
                                                     <div className="flex gap-2 items-center mb-2">
@@ -654,7 +764,7 @@ const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, o
                                                         <input 
                                                             type="text" 
                                                             placeholder="Reason (Required)" 
-                                                            value={editReason}
+                                                            value={editReason} 
                                                             onChange={(e) => setEditReason(e.target.value)}
                                                             className="flex-1 border rounded p-1 px-2 text-xs"
                                                         />
@@ -667,6 +777,95 @@ const CandidateDetail: React.FC<CandidateDetailProps> = ({ candidate, onClose, o
                                             )}
                                         </div>
                                     )})}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* SOURCES & ATTACHMENTS TAB (NEW) */}
+                {activeTab === 'sources' && (
+                    <div className="max-w-4xl mx-auto space-y-6 animate-fade-in">
+                        {/* 1. PRIMARY SOURCE */}
+                        <div className="bg-white rounded-lg border border-slate-200 p-5 shadow-sm">
+                            <h3 className="text-sm font-bold text-slate-800 uppercase tracking-widest mb-4 flex items-center gap-2">
+                                <FileText className="w-4 h-4 text-blue-500"/> Primary Resume / Source File
+                            </h3>
+                            <div className="flex items-center justify-between bg-slate-50 p-4 rounded-lg border border-slate-100">
+                                <div className="flex items-center gap-3">
+                                    <div className="p-3 bg-red-100 rounded text-red-600"><FileText className="w-6 h-6"/></div>
+                                    <div>
+                                        <div className="font-bold text-slate-800">Original Resume (PDF)</div>
+                                        <div className="text-xs text-slate-500">Source: {candidate.source} | Uploaded: {new Date(candidate.createdAt).toLocaleDateString()}</div>
+                                    </div>
+                                </div>
+                                {candidate.resumeUrl && (
+                                    <a href={candidate.resumeUrl} target="_blank" rel="noreferrer" className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-300 rounded text-sm font-bold text-slate-600 hover:text-blue-600 hover:border-blue-300 transition-colors shadow-sm">
+                                        <Eye className="w-4 h-4"/> Preview
+                                    </a>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* 2. SMART SOURCE NEXUS */}
+                        <div className="bg-white rounded-lg border border-slate-200 p-5 shadow-sm">
+                            <h3 className="text-sm font-bold text-slate-800 uppercase tracking-widest mb-2 flex items-center gap-2">
+                                <LinkIcon className="w-4 h-4 text-emerald-500"/> Smart Source Nexus
+                            </h3>
+                            <p className="text-xs text-slate-500 mb-4">AI detected the following attachments or links in the resume. Upload files to link them.</p>
+                            
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                {detectedItems.length === 0 && (
+                                    <div className="col-span-2 text-center p-8 border-2 border-dashed border-slate-200 rounded-lg text-slate-400 text-sm">
+                                        No additional attachments detected in the resume text.
+                                        <br/>You can manually add files below.
+                                    </div>
+                                )}
+
+                                {detectedItems.map((item) => (
+                                    <div key={item.id} className={`p-4 rounded-lg border transition-all relative group ${item.isLinked ? 'bg-emerald-50 border-emerald-200' : 'bg-white border-slate-200 border-dashed hover:border-blue-300'}`}>
+                                        <div className="flex justify-between items-start mb-2">
+                                            <div className="flex items-center gap-2">
+                                                {item.type === 'url_ref' ? <Globe className="w-4 h-4 text-blue-500"/> : <Paperclip className="w-4 h-4 text-slate-400"/>}
+                                                <span className="font-bold text-slate-800 text-sm">{item.name}</span>
+                                            </div>
+                                            <span className="text-[10px] bg-white px-2 py-0.5 rounded border border-slate-100 text-slate-400">{item.context || 'Detected'}</span>
+                                        </div>
+                                        
+                                        {/* Content Area */}
+                                        <div className="mt-3">
+                                            {item.isLinked ? (
+                                                <div className="flex gap-2">
+                                                    {item.url ? (
+                                                        <a href={item.url} target="_blank" rel="noreferrer" className="flex-1 text-center py-1.5 bg-blue-600 text-white rounded text-xs font-bold hover:bg-blue-700 flex items-center justify-center gap-1">
+                                                            <ExternalLink className="w-3 h-3"/> Open Link
+                                                        </a>
+                                                    ) : (
+                                                        <a href={item.fileUrl} target="_blank" rel="noreferrer" className="flex-1 text-center py-1.5 bg-emerald-600 text-white rounded text-xs font-bold hover:bg-emerald-700 flex items-center justify-center gap-1">
+                                                            <Eye className="w-3 h-3"/> View File
+                                                        </a>
+                                                    )}
+                                                </div>
+                                            ) : (
+                                                <label className="flex flex-col items-center justify-center w-full h-20 border border-slate-200 bg-slate-50 rounded cursor-pointer hover:bg-blue-50 hover:border-blue-200 transition-colors">
+                                                    <Upload className="w-4 h-4 text-slate-400 mb-1"/>
+                                                    <span className="text-[10px] text-slate-500 font-medium">Upload to Link</span>
+                                                    <input type="file" className="hidden" onChange={(e) => handleFileUpload(e, item.id)} />
+                                                </label>
+                                            )}
+                                        </div>
+                                    </div>
+                                ))}
+
+                                {/* Add Manual Attachment Block */}
+                                <div className="p-4 rounded-lg border border-slate-200 border-dashed bg-slate-50/50 flex flex-col justify-center items-center gap-2 hover:bg-slate-50 transition-colors">
+                                    <label className="cursor-pointer flex flex-col items-center gap-2 w-full h-full justify-center">
+                                        <div className="p-2 bg-white rounded-full shadow-sm">
+                                            <Plus className="w-4 h-4 text-slate-400"/>
+                                        </div>
+                                        <span className="text-xs text-slate-500 font-bold">Add Manual File</span>
+                                        <input type="file" className="hidden" onChange={(e) => handleFileUpload(e)} />
+                                    </label>
                                 </div>
                             </div>
                         </div>

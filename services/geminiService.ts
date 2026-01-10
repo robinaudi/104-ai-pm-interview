@@ -6,43 +6,52 @@ import { APP_VERSION } from "../constants";
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-// Helper to decode Industry Rule stored as JSON
-const formatIndustryRule = (standard: ScoringStandard): string => {
-    if (standard.category !== 'INDUSTRY_PENALTY') return standard.rule_text;
-    
-    // Check if rule_text looks like JSON
-    try {
-        const config = JSON.parse(standard.rule_text);
-        // It's a structured penalty. Format it for AI.
-        // Example: {"competency": 0.7, "culture": 0.6}
-        const industry = standard.condition;
-        const penalties = Object.entries(config)
-            .map(([key, val]) => {
-                const displayKey = key === 'competency' ? 'Skills Match' : key.charAt(0).toUpperCase() + key.slice(1);
-                return `${displayKey} x${val}`;
-            })
-            .join(', ');
-        
-        return `IF Candidate Industry is "${industry}" -> Apply Multipliers: ${penalties}. \n   CRITICAL: Add "Industry Penalty Applied: ${industry}" to Gap Analysis.`;
-    } catch (e) {
-        return standard.rule_text;
-    }
-};
-
 // Construct prompt dynamically from DB Standards
 const getSystemInstruction = (language: string, jdContent: string, standards: ScoringStandard[]) => {
     
+    // 1. Experience Rules
     const experienceRules = standards
         .filter(s => s.category === 'EXPERIENCE_CEILING' && s.is_active)
         .sort((a, b) => a.priority - b.priority)
         .map(s => `- ${s.rule_text}`)
         .join('\n');
 
-    const industryRules = standards
-        .filter(s => s.category === 'INDUSTRY_PENALTY' && s.is_active)
-        .sort((a, b) => a.priority - b.priority)
-        .map(s => `- ${formatIndustryRule(s)}`)
-        .join('\n');
+    // 2. Industry Penalty Rules (V4.2 Smart Context)
+    const penaltyRules = standards.filter(s => s.category === 'INDUSTRY_PENALTY' && s.is_active);
+    let industryPenaltyInstruction = "";
+    
+    if (penaltyRules.length > 0) {
+        const industries = penaltyRules.map(p => `"${p.condition}"`).join(', ');
+        const multiplier = penaltyRules[0].rule_text; // e.g. "0.6"
+        
+        industryPenaltyInstruction = `
+### V4.2 CONTEXT-AWARE INDUSTRY PENALTY ###
+Check for Penalty Keywords in Work History: [${industries}].
+Synonyms: [MES, Factory, Plant, SMT, Hardware OEM/ODM, WMS].
+
+**INTELLIGENT SCORING RULE:**
+Do NOT blindly multiply the final score if a penalty keyword exists.
+Analyze the **Career Trajectory**:
+
+1. **Past Tense (Transitioned):**
+   - If the candidate *started* in a Penalty Industry (e.g., Manufacturing) but *moved* to a Target Industry (e.g., SaaS/Internet) later:
+   - **IGNORE the penalty** for their current capability score.
+   - Only discount their "Total Relevant Years" (e.g., set 'isRelevant' to FALSE for the manufacturing jobs).
+   - **DO NOT** reduce the scores for Dimensions A, B, C, D just because they worked there 5 years ago.
+
+2. **Present Tense (Stuck):**
+   - If the candidate is *currently* in a Penalty Industry or the majority of their career (>50%) is in it:
+   - **APPLY PENALTY**: Multiply Dimension A & B scores by **${multiplier}**.
+
+3. **Hybrid/Mixed:**
+   - Score primarily based on the *Target Industry* roles.
+   - Treat the Penalty roles as "General Working Experience" (soft skills only), contributing 0 to "Industry Match" (Dimension A).
+
+**CRITICAL OUTPUT INSTRUCTION:**
+- If you mark a job as 'isRelevant': false, do NOT include it in the scoring for (A) Industry or (B) System.
+- If you see a Penalty Keyword but decide NOT to penalize (because they switched industries), you MUST explicitly state in 'scoringExplanation': "⚠️ Past experience in [Industry] detected but ignored due to recent relevant SaaS track record."
+`;
+    }
 
     const generalRules = standards
         .filter(s => s.category === 'GENERAL_RULE' && s.is_active)
@@ -50,12 +59,11 @@ const getSystemInstruction = (language: string, jdContent: string, standards: Sc
         .map(s => `- ${s.rule_text}`)
         .join('\n');
 
-    // NEW V4 DYNAMIC DIMENSIONS
+    // 3. V4 Dimensions
     const dimensionRules = standards
         .filter(s => s.category === 'DIMENSION_WEIGHT' && s.is_active)
         .sort((a, b) => a.priority - b.priority)
         .map(s => {
-            // Note: v4 descriptions contain "Benchmark" and "Threshold" info which is crucial for the AI
             return `   - **${s.condition}** (Weight: ${s.rule_text}%): ${s.description}`;
         })
         .join('\n');
@@ -73,25 +81,39 @@ CRITICAL: Read the "Threshold" and "Benchmark" in the descriptions below.
 
 ${dimensionRules || '- No dimensions configured. Use general judgement.'}
 
+${industryPenaltyInstruction}
+
 *** 2. EXPERIENCE CEILING (Baseline) ***
 ${generalRules || '- No specific discount rules.'}
 ${experienceRules || '- No specific experience ceilings defined.'}
 
-*** 3. INDUSTRY PENALTY ***
-${industryRules || '- No specific industry penalties defined.'}
-
-*** 4. SNAPSHOT GENERATION (Mandatory) ***
+*** 3. SNAPSHOT GENERATION (Mandatory) ***
 You must generate a specific "Evaluation Summary" (snapshot).
 - If Birth Year is missing, estimate it based on (Current Year - Age) or (Current Year - 22 - YearsOfExperience).
 - Format "Level" as: Junior (0-2y), Mid (3-5y), Senior (6-9y), Lead/Principal (10y+).
 - Key Background: Summarize top 3-4 hard skills/certs (e.g. PMP, ERP, SaaS).
+
+*** 4. ATTACHMENT & SOURCE DETECTION (Critical for 104/Teamdoor) ***
+You must scan the resume for a section called "附件" (Attachments), "作品集" (Portfolio), or "推薦人" (References).
+Structure these as 'detectedAttachments'.
+- If you see "English Resume 下載檔案", create an entry: { name: "English Resume", type: "file_ref", context: "104 Attachment" }.
+- If you see a link like "github.com/...", create: { name: "GitHub", type: "url_ref", url: "..." }.
+- If you see "Reference: John Doe", create: { name: "Ref: John Doe", type: "recommendation" }.
+
+*** 5. SOURCE IDENTIFICATION ***
+Look for headers, footers, or watermarks to identify the source platform.
+- If text contains "104人力銀行" or "104 Job Bank" -> Set 'detectedSource' to "104 Corp".
+- If text contains "LinkedIn" or "linkedin.com" in header/footer -> Set 'detectedSource' to "LinkedIn".
+- If text contains "Teamdoor" -> Set 'detectedSource' to "Teamdoor".
+- If text contains "CakeResume" -> Set 'detectedSource' to "CakeResume".
+- Otherwise -> "User Upload".
 
 *** JOB DESCRIPTION ***
 ${jdContent}
 ***********************
 
 ### OUTPUT STYLE ###
-- **scoringExplanation**: A concise paragraph explaining the logic, especially why they hit/missed the threshold (A-E).
+- **scoringExplanation**: A concise paragraph explaining the logic. IF PENALTY APPLIED, MENTION IT FIRST.
 - **Summary**: ONE sentence.
 - **HR Advice**: 3 Bullet points.
 - **Language**: ${language}.
@@ -153,7 +175,19 @@ const analysisSchema = {
                     title: { type: Type.STRING },
                     duration: { type: Type.STRING },
                     description: { type: Type.STRING },
-                    isRelevant: { type: Type.BOOLEAN }
+                    isRelevant: { type: Type.BOOLEAN, description: "Set to FALSE if this role is in a Penalty Industry (Manufacturing/Hardware) and JD is SaaS. Set to TRUE only if role matches JD domain." }
+                }
+            }
+        },
+        detectedAttachments: {
+            type: Type.ARRAY,
+            items: {
+                type: Type.OBJECT,
+                properties: {
+                    name: { type: Type.STRING },
+                    type: { type: Type.STRING, enum: ["file_ref", "url_ref", "recommendation"] },
+                    context: { type: Type.STRING },
+                    url: { type: Type.STRING }
                 }
             }
         }
@@ -450,6 +484,9 @@ const parseResponse = (text: string): AnalysisResult => {
     if (!parsed.extractedData.otherSkills) parsed.extractedData.otherSkills = [];
     if (!parsed.gapAnalysis) parsed.gapAnalysis = { pros: [], cons: [] };
     
+    // Ensure detectedAttachments is initialized
+    if (!parsed.extractedData.detectedAttachments) parsed.extractedData.detectedAttachments = [];
+
     if (parsed.matchScore > 10) parsed.matchScore = parsed.matchScore / 10;
     
     if (parsed.fiveForces) {

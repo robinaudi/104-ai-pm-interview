@@ -1,10 +1,16 @@
 
 import React, { useState, useEffect } from 'react';
-import { LayoutDashboard, Users, LogOut, Plus, ShieldCheck, AlertCircle, RefreshCw, Database, Globe, CheckCircle2, X, AlertTriangle, Loader2, LockKeyhole, Zap } from 'lucide-react';
-import { MOCK_CANDIDATES, DEFAULT_JOBS } from './constants';
+import { LayoutDashboard, Users, Plus, ShieldCheck, AlertCircle, RefreshCw, Database, Globe, CheckCircle2, X, Loader2, Zap } from 'lucide-react';
+import { onAuthStateChanged } from 'firebase/auth'; // Import Firebase listener
+
+import { MOCK_CANDIDATES, DEFAULT_JOBS, MOCK_USER } from './constants';
 import { User, Candidate, JobDescription } from './types';
 import { logAction } from './services/logService';
-import { fetchCandidates, createCandidate, isSupabaseConfigured, markCandidateAsViewed, softDeleteCandidate, resolveUserPermissions, supabase, signOut, updateCandidate, fetchJobDescriptions } from './services/supabaseService';
+import { 
+    fetchCandidates, createCandidate, isSupabaseConfigured, markCandidateAsViewed, 
+    softDeleteCandidate, resolveUserPermissions, auth, verifyMagicLink, signOut, 
+    updateCandidate, fetchJobDescriptions, initializeDatabase // Import Init Function
+} from './services/supabaseService';
 import { reEvaluateCandidate } from './services/geminiService';
 import { useLanguage } from './contexts/LanguageContext';
 
@@ -16,19 +22,16 @@ import AIChat from './components/AIChat';
 import PermissionGuard from './components/PermissionGuard';
 import ConfigModal from './components/ConfigModal';
 import AccessControlModal from './components/AccessControlModal';
+import LoginPage from './components/LoginPage'; 
 
 const App: React.FC = () => {
   const { t, language, setLanguage } = useLanguage();
 
-  // --- BYPASS AUTH: Hardcoded Admin User ---
-  const [user, setUser] = useState<User | null>({
-      id: 'dev-bypass-admin',
-      email: 'robinhsu@91app.com',
-      role: 'ADMIN',
-      permissions: ['VIEW_DASHBOARD', 'VIEW_LIST', 'EDIT_CANDIDATE', 'DELETE_CANDIDATE', 'IMPORT_DATA', 'MANAGE_ACCESS', 'MANAGE_JD', 'AI_CHAT', 'VIEW_LOGS'],
-      avatarUrl: 'https://ui-avatars.com/api/?name=Robin+Hsu&background=0D8ABC&color=fff'
-  });
+  // Auth State
+  const [user, setUser] = useState<User | null>(null);
+  const [isAuthChecking, setIsAuthChecking] = useState(true);
 
+  // Data State
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [jds, setJds] = useState<JobDescription[]>([]);
   const [view, setView] = useState<'dashboard' | 'candidates'>('dashboard');
@@ -39,11 +42,10 @@ const App: React.FC = () => {
   const [isConfigOpen, setIsConfigOpen] = useState(false);
   const [isAccessControlOpen, setIsAccessControlOpen] = useState(false);
 
+  // UI States
   const [dataLoading, setDataLoading] = useState(false);
-  const [isBatchProcessing, setIsBatchProcessing] = useState(false);
-  const [batchProgress, setBatchProgress] = useState(0);
   const [dbError, setDbError] = useState<string | null>(null);
-  const [isDbConnected, setIsDbConnected] = useState(isSupabaseConfigured());
+  const [isDbConnected, setIsDbConnected] = useState(false);
   
   const [toast, setToast] = useState<{
       message: string, 
@@ -51,42 +53,77 @@ const App: React.FC = () => {
       candidate?: Candidate 
   } | null>(null);
 
+  // Filters
   const [filterSource, setFilterSource] = useState<string>('All');
   const [filterRole, setFilterRole] = useState<string>('All');
   const [filterTopTalent, setFilterTopTalent] = useState<boolean>(false);
-  
-  // NEW: Active Applicant Filter (Persistent Tab Logic)
   const [showActiveApplicantsOnly, setShowActiveApplicantsOnly] = useState(false);
 
-  // --- INITIAL DATA LOAD ---
+  // --- INITIALIZATION & AUTH ---
   useEffect(() => {
-    // Check URL hash for cleanup (in case redirected from OAuth previously)
-    if (window.location.hash && window.location.hash.includes('access_token')) {
-        window.history.replaceState(null, '', window.location.pathname);
-    }
+    const init = async () => {
+        // 1. Initialize DB Schema/Seed Data
+        await initializeDatabase();
+
+        // 2. Check Magic Link Redirects
+        await verifyMagicLink();
+
+        const configured = isSupabaseConfigured();
+        setIsDbConnected(configured);
+
+        if (!configured) {
+             // Fallback logic, though with hardcoded config this shouldn't happen unless Firebase is down
+            console.warn("DB not configured. Entering Demo Mode.");
+            setUser(MOCK_USER); 
+            setCandidates(MOCK_CANDIDATES);
+            setJds(DEFAULT_JOBS);
+            if (DEFAULT_JOBS.length > 0) setFilterRole(DEFAULT_JOBS[0].title);
+            setIsAuthChecking(false);
+            return;
+        }
+
+        // 3. Real Auth Listener
+        if (auth) {
+            const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+                if (firebaseUser) {
+                    // Resolve Role & Permissions from Firestore
+                    const { role, permissions } = await resolveUserPermissions(firebaseUser.email || '');
+                    
+                    const appUser: User = {
+                        id: firebaseUser.uid,
+                        email: firebaseUser.email || '',
+                        role: role,
+                        permissions: permissions,
+                        avatarUrl: firebaseUser.photoURL || undefined
+                    };
+                    setUser(appUser);
+                    loadData(true); // Load data after login
+                } else {
+                    setUser(null);
+                    setCandidates([]);
+                }
+                setIsAuthChecking(false);
+            });
+            return () => unsubscribe();
+        } else {
+            setIsAuthChecking(false);
+        }
+    };
     
-    loadData();
+    init();
   }, []);
 
+  // Auto-close Toast
   useEffect(() => {
       if (toast && toast.type === 'success') {
-          const timer = setTimeout(() => setToast(null), 5000); // Reduce timeout to 5s since we auto-open
+          const timer = setTimeout(() => setToast(null), 5000);
           return () => clearTimeout(timer);
       }
   }, [toast]);
 
-  const loadData = async () => {
-    if (!isSupabaseConfigured()) {
-      setIsDbConnected(false);
-      setCandidates(MOCK_CANDIDATES); 
-      setJds(DEFAULT_JOBS);
-      // Auto-select Default Project Manager logic in mock mode
-      const defaultRole = DEFAULT_JOBS.sort((a, b) => (a.priority || 99) - (b.priority || 99))[0];
-      if (defaultRole) setFilterRole(defaultRole.title);
-      return;
-    }
+  const loadData = async (forceDb = false) => {
+    if (!isSupabaseConfigured() && !forceDb) return;
 
-    setIsDbConnected(true);
     setDataLoading(true);
     setDbError(null);
     try {
@@ -99,96 +136,42 @@ const App: React.FC = () => {
       const loadedJds = jdData.length > 0 ? jdData : DEFAULT_JOBS;
       setJds(loadedJds);
 
-      // --- DEFAULT FILTER LOGIC (Project Manager) ---
-      // Sort by priority (1 is highest) and pick the first one
+      // Default Filter Logic: Pick highest priority role
       if (loadedJds.length > 0) {
           const sortedJds = [...loadedJds].sort((a, b) => (a.priority || 99) - (b.priority || 99));
           const primaryRole = sortedJds[0];
-          // Check if we already have a filter set, if 'All' change it to Default
+          // Only set if currently 'All'
           setFilterRole(prev => prev === 'All' ? primaryRole.title : prev);
       }
 
     } catch (err) {
       console.error(err);
-      setDbError("Failed to load data.");
-      setCandidates([]); 
+      setDbError("Failed to load data from Firebase.");
     } finally {
       setDataLoading(false);
     }
   };
 
   const handleLogout = async () => {
-    alert("Dev Mode: Logout is disabled. You are permanently logged in as Admin.");
+    await signOut();
+    setUser(null);
+    window.location.reload();
   };
 
-  // --- BATCH RE-SCORE LOGIC ---
-  const handleBatchRescore = async () => {
-      if (!candidates.length) return;
-      if (!confirm(`This will re-analyze ALL ${candidates.length} candidates using the NEW Strict Scoring Benchmark (Robin Hsu Standard). This may take a while. Continue?`)) return;
-
-      setIsBatchProcessing(true);
-      setBatchProgress(0);
-      let successCount = 0;
-
-      const defaultJD = jds.length > 0 ? jds[0] : DEFAULT_JOBS[0];
-
-      for (let i = 0; i < candidates.length; i++) {
-          const c = candidates[i];
-          setBatchProgress(Math.round(((i + 1) / candidates.length) * 100));
-          
-          try {
-              const matchingJD = jds.find(j => j.title === c.roleApplied) || defaultJD;
-              const targetLang = language === 'zh' ? 'Traditional Chinese' : 'English';
-              
-              const newAnalysis = await reEvaluateCandidate(c, matchingJD.content, targetLang);
-              
-              const updatedCandidate = { 
-                  ...c, 
-                  analysis: newAnalysis, 
-                  updatedAt: new Date().toISOString() 
-              };
-
-              // Optimistic Update
-              setCandidates(prev => prev.map(p => p.id === c.id ? updatedCandidate : p));
-
-              // DB Update
-              if (isDbConnected) {
-                  await updateCandidate(updatedCandidate);
-              }
-
-              successCount++;
-          } catch (e) {
-              console.error(`Failed to re-score ${c.name}`, e);
-          }
-      }
-
-      setIsBatchProcessing(false);
-      setToast({ message: `Batch Update Complete. Re-scored ${successCount}/${candidates.length} candidates.`, type: 'success' });
-      if (user) logAction(user, 'BATCH_RESCORE', `Processed ${candidates.length} candidates`);
-  };
-
-  // --- HANDLERS ---
+  // --- ACTIONS ---
   const handleImport = async (newCandidate: Candidate) => {
     const previousCandidates = [...candidates];
     setCandidates(prev => [newCandidate, ...prev]);
     setIsImportOpen(false);
-    
-    // Auto-Open the new candidate
     setSelectedCandidate(newCandidate);
     
-    // NOTE: We pass 'newCandidate' directly to toast to ensure object reference is valid
     try {
       await createCandidate(newCandidate);
       if (user) logAction(user, 'IMPORT_CANDIDATE', newCandidate.name, { id: newCandidate.id });
-      setToast({ 
-          message: `${newCandidate.name} imported successfully.`, 
-          type: 'success', 
-          candidate: newCandidate 
-      });
+      setToast({ message: `${newCandidate.name} imported successfully.`, type: 'success', candidate: newCandidate });
     } catch (error: any) {
       setCandidates(previousCandidates);
-      console.error(error);
-      setToast({ message: `Import Failed: ${error.message || 'Check DB Schema'}`, type: 'error' });
+      setToast({ message: `Import Failed: ${error.message}`, type: 'error' });
     }
   };
 
@@ -197,10 +180,10 @@ const App: React.FC = () => {
       const previousCandidates = [...candidates];
       setCandidates(prev => prev.filter(c => c.id !== id));
       try {
-        if (!user) throw new Error("No user logged in");
+        if (!user) throw new Error("No user");
         await softDeleteCandidate(id, user.email);
         logAction(user, 'DELETE_CANDIDATE', id);
-        setToast({ message: "Candidate removed (Soft Delete).", type: 'success' });
+        setToast({ message: "Candidate removed.", type: 'success' });
       } catch (error: any) {
         setCandidates(previousCandidates);
         setToast({ message: `Delete Failed: ${error.message}`, type: 'error' });
@@ -209,38 +192,29 @@ const App: React.FC = () => {
   };
 
   const handleCandidateUpdate = async (updated: Candidate) => {
-    // 1. Optimistic UI update
     setCandidates(prev => prev.map(c => c.id === updated.id ? updated : c));
-    
-    // Auto-open if it came from ImportModal's "Update" flow (duplicate resolution)
-    // We can infer this if selectedCandidate is not currently set or if we are in list view
     if (!selectedCandidate) {
         setSelectedCandidate(updated);
     } else if (selectedCandidate.id === updated.id) {
-        setSelectedCandidate(updated); // Refresh current view
+        setSelectedCandidate(updated);
     }
     
-    // 2. DB Update
     try {
         await updateCandidate(updated);
-        if (user) logAction(user, 'UPDATE_CANDIDATE', updated.name, { id: updated.id, version: 'new_upload' });
-        setToast({ message: `Candidate ${updated.name} updated successfully.`, type: 'success' });
+        if (user) logAction(user, 'UPDATE_CANDIDATE', updated.name, { id: updated.id });
+        setToast({ message: `Candidate updated.`, type: 'success' });
     } catch (error: any) {
-        console.error(error);
-        setToast({ message: `Update Failed: ${error.message || 'Check Database Connection/Schema'}`, type: 'error' });
-        // Don't reload immediately so user can see error
+        setToast({ message: `Update Failed: ${error.message}`, type: 'error' });
     }
   };
 
   const handleSelectCandidate = (candidate: Candidate) => {
       setSelectedCandidate(candidate);
-      // Mark as read logic
-      if (user) {
+      if (user && isDbConnected) {
           const alreadyViewed = candidate.viewedBy?.includes(user.email);
           if (!alreadyViewed) {
               const updatedViewedBy = [...(candidate.viewedBy || []), user.email];
               const updatedCandidate = { ...candidate, viewedBy: updatedViewedBy };
-              // We don't await this one for speed
               updateCandidate(updatedCandidate); 
               setCandidates(prev => prev.map(c => c.id === updatedCandidate.id ? updatedCandidate : c));
               markCandidateAsViewed(candidate.id, user.email);
@@ -252,42 +226,42 @@ const App: React.FC = () => {
     if (type === 'source') { setFilterSource(value as string); setFilterRole('All'); setFilterTopTalent(false); }
     if (type === 'role') { setFilterRole(value as string); setFilterSource('All'); setFilterTopTalent(false); }
     if (type === 'topTalent') { setFilterTopTalent(true); setFilterSource('All'); setFilterRole('All'); }
-    // Reset Active tab when using dashboard drill-down
     setShowActiveApplicantsOnly(false);
     setView('candidates');
   };
 
   const resetFilters = () => { setFilterSource('All'); setFilterRole('All'); setFilterTopTalent(false); };
-
-  // Filter Logic including the new "Active Applicant" tab
-  const getFilteredCandidates = () => {
-      let result = candidates;
-      
-      if (showActiveApplicantsOnly) {
-          result = result.filter(c => c.isUnsolicited);
-      }
-      
-      // Other filters apply on top (or we could clear them when switching tabs)
-      // For now, let them coexist
-      return result;
-  };
-
+  
   const activeApplicantCount = candidates.filter(c => c.isUnsolicited).length;
 
-  // 5. Main App
-  if (!user) return null; // Should not happen in bypass mode
+  // --- RENDER ---
 
+  if (isAuthChecking) {
+      return (
+          <div className="h-screen w-full flex flex-col items-center justify-center bg-slate-50 gap-4">
+              <Loader2 className="w-10 h-10 text-blue-600 animate-spin" />
+              <p className="text-slate-500 font-medium animate-pulse">Initializing GenAI Portal...</p>
+          </div>
+      );
+  }
+
+  // Not Logged In
+  if (!user) {
+      return (
+        <>
+            <LoginPage onLogin={(u) => setUser(u)} onOpenConfig={() => setIsConfigOpen(true)} />
+            {isConfigOpen && <ConfigModal onClose={() => setIsConfigOpen(false)} />}
+        </>
+      );
+  }
+
+  // Logged In
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col">
-      {/* Toast Notification */}
+      {/* Toast */}
       {toast && (
           <div 
-            onClick={() => { 
-                if (toast.candidate) { 
-                    handleSelectCandidate(toast.candidate); 
-                    setToast(null); 
-                } 
-            }}
+            onClick={() => { if (toast.candidate) { handleSelectCandidate(toast.candidate); setToast(null); } }}
             className={`fixed top-24 left-1/2 transform -translate-x-1/2 z-[100] px-6 py-4 rounded-xl shadow-2xl flex items-center gap-4 animate-slide-in-top border-2 transition-transform hover:scale-105 cursor-pointer backdrop-blur-sm max-w-lg
             ${toast.type === 'success' ? 'bg-slate-900/95 text-white border-slate-700' : 'bg-red-600/95 text-white border-red-500'}`}
           >
@@ -296,7 +270,6 @@ const App: React.FC = () => {
               </div>
               <div>
                  <p className="font-bold text-sm">{toast.message}</p>
-                 {/* Remove "Click to view" since we auto-open, but allow click if they closed modal */}
                  {toast.candidate && !selectedCandidate && <p className="text-xs opacity-70 mt-0.5 font-mono">Click to open profile</p>}
               </div>
               <button className="ml-2 p-1 hover:bg-white/10 rounded-full" onClick={(e) => { e.stopPropagation(); setToast(null); }}>
@@ -305,12 +278,12 @@ const App: React.FC = () => {
           </div>
       )}
 
-      {/* Navigation */}
+      {/* Header */}
       <header className="bg-slate-900 text-white shadow-lg sticky top-0 z-30">
         <div className="w-full px-6 lg:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
              <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center font-bold text-lg">H</div>
-             <span className="font-semibold text-lg tracking-tight">HR GenAI <span className="text-[10px] bg-emerald-500 text-slate-900 px-1 py-0.5 rounded ml-1 font-bold">DEV</span></span>
+             <span className="font-semibold text-lg tracking-tight">HR GenAI <span className="text-[10px] bg-emerald-500 text-slate-900 px-1 py-0.5 rounded ml-1 font-bold">V4.2</span></span>
           </div>
           
           <nav className="hidden md:flex gap-6">
@@ -324,7 +297,6 @@ const App: React.FC = () => {
                     <Users className="w-4 h-4" /> {t('candidates')}
                 </button>
             </PermissionGuard>
-            {/* NEW ACTIVE APPLICANTS TAB */}
             <PermissionGuard user={user} requiredPermission="VIEW_LIST">
                 <button onClick={() => { setView('candidates'); setShowActiveApplicantsOnly(true); }} className={`flex items-center gap-2 text-sm font-medium transition-colors relative ${showActiveApplicantsOnly ? 'text-indigo-400' : 'text-slate-400 hover:text-white'}`}>
                     <Zap className="w-4 h-4" /> Active Applicants
@@ -343,12 +315,12 @@ const App: React.FC = () => {
                 <Globe className="w-3 h-3" /> {language === 'en' ? 'EN' : '繁中'}
              </button>
 
-             <button onClick={() => setIsConfigOpen(true)} className={`flex items-center gap-2 text-xs px-3 py-1.5 rounded-full border transition-colors ${isDbConnected ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400' : 'border-amber-500/30 bg-amber-500/10 text-amber-400 animate-pulse'}`}>
-                <Database className="w-3 h-3" /> {isDbConnected ? t('dbConnected') : t('connectDb')}
+             <button className={`flex items-center gap-2 text-xs px-3 py-1.5 rounded-full border transition-colors border-emerald-500/30 bg-emerald-500/10 text-emerald-400`}>
+                <Database className="w-3 h-3" /> {t('dbConnected')}
              </button>
 
              <div className="h-6 w-px bg-slate-700 mx-2" />
-             <div className="flex items-center gap-2">
+             <div className="flex items-center gap-2 cursor-pointer hover:opacity-80" onClick={handleLogout} title="Logout">
                 <div className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold ring-2 ring-slate-800 overflow-hidden">
                   {user.avatarUrl ? <img src={user.avatarUrl} alt="User" /> : user.email[0].toUpperCase()}
                 </div>
@@ -363,7 +335,7 @@ const App: React.FC = () => {
              <div>
                 <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-3">
                   {showActiveApplicantsOnly ? 'Active Applicants (主動應徵)' : (view === 'dashboard' ? t('overview') : t('candidateManagement'))}
-                  <button onClick={loadData} disabled={dataLoading} className="p-2 bg-white border border-slate-200 rounded-full hover:bg-slate-50 hover:text-blue-600 transition-colors shadow-sm">
+                  <button onClick={() => loadData(true)} disabled={dataLoading} className="p-2 bg-white border border-slate-200 rounded-full hover:bg-slate-50 hover:text-blue-600 transition-colors shadow-sm">
                     <RefreshCw className={`w-4 h-4 text-slate-400 ${dataLoading ? 'animate-spin text-blue-500' : ''}`} />
                   </button>
                 </h1>
@@ -376,7 +348,7 @@ const App: React.FC = () => {
            <div className="flex items-center gap-4">
               {dbError && (
                  <span className="text-xs text-red-600 bg-red-50 px-3 py-1.5 rounded-full border border-red-200 flex items-center gap-2 cursor-pointer hover:bg-red-100" onClick={() => setIsConfigOpen(true)}>
-                    <AlertCircle className="w-3 h-3" /> {dbError} <span className="underline ml-1">Fix</span>
+                    <AlertCircle className="w-3 h-3" /> {dbError} <span className="underline ml-1">Check Config</span>
                  </span>
               )}
               
@@ -411,7 +383,7 @@ const App: React.FC = () => {
         )}
       </main>
 
-      {/* DETAILED VIEW MODAL */}
+      {/* MODALS */}
       {selectedCandidate && (
         <CandidateDetail 
           candidate={selectedCandidate} 

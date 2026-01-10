@@ -1,5 +1,5 @@
 {
-  "name": "hr-recruitment-ai",
+  "name": "hr-recruitment-ai---firebase",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -9,7 +9,6 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.89.0",
     "vite": "^7.3.0",
     "react-dom": "^19.2.3",
     "react": "^19.2.3",
@@ -17,7 +16,8 @@
     "lucide-react": "^0.562.0",
     "recharts": "^3.6.0",
     "@vitejs/plugin-react": "^5.1.2",
-    "pdfjs-dist": "3.11.174"
+    "pdfjs-dist": "3.11.174",
+    "firebase": "^12.7.0"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",

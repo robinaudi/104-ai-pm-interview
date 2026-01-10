@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Upload, FileText, Loader2, AlertCircle, CheckCircle, Briefcase, Image as ImageIcon, Link as LinkIcon, Clipboard, ChevronDown, Camera, ExternalLink, Search, Linkedin, Mail, User as UserIcon, AlertTriangle, ArrowRight, History, Eye, Crop, Star, Zap } from 'lucide-react';
+import { X, Upload, FileText, Loader2, AlertCircle, CheckCircle, Briefcase, Image as ImageIcon, Link as LinkIcon, Clipboard, ChevronDown, Camera, ExternalLink, Search, Linkedin, Mail, User as UserIcon, AlertTriangle, ArrowRight, History, Eye, Crop, Star, Zap, Globe } from 'lucide-react';
 import { analyzeResume } from '../services/geminiService';
 import { extractProfileImageFromPDF, renderPDFPageToDataURL } from '../services/pdfService';
 import { Candidate, CandidateStatus, User, JobDescription } from '../types';
@@ -11,9 +11,9 @@ import { DEFAULT_JOBS } from '../constants';
 interface ImportModalProps {
   onClose: () => void;
   onImport: (candidate: Candidate) => void;
-  onUpdate?: (candidate: Candidate) => void; // Support for updating existing
+  onUpdate?: (candidate: Candidate) => void; 
   currentUser: User;
-  existingCandidates?: Candidate[]; // To check duplicates
+  existingCandidates?: Candidate[];
 }
 
 const ImportModal: React.FC<ImportModalProps> = ({ onClose, onImport, onUpdate, currentUser, existingCandidates = [] }) => {
@@ -25,12 +25,13 @@ const ImportModal: React.FC<ImportModalProps> = ({ onClose, onImport, onUpdate, 
   const [selectedJobId, setSelectedJobId] = useState<string>('');
   
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [statusText, setStatusText] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [extractedPhoto, setExtractedPhoto] = useState<string | null>(null);
   const [pdfPreview, setPdfPreview] = useState<string | null>(null);
   
-  // Staging state before final import
+  // Staging state
   const [analysisResult, setAnalysisResult] = useState<any>(null);
   const [linkedInUrl, setLinkedInUrl] = useState('');
 
@@ -41,15 +42,9 @@ const ImportModal: React.FC<ImportModalProps> = ({ onClose, onImport, onUpdate, 
       const loadJobs = async () => {
           let jobs = await fetchJobDescriptions();
           if (jobs.length === 0) jobs = DEFAULT_JOBS;
-          
-          // SORT BY PRIORITY (Lower number = Higher Priority)
-          // Default to 99 if priority is missing to put them last
           const sortedJobs = jobs.sort((a, b) => (a.priority || 99) - (b.priority || 99));
-          
           setAvailableJobs(sortedJobs);
           
-          // INTELLIGENT DEFAULT SELECTION
-          // Prioritize "Project Manager" or "專案經理" if available, regardless of priority order
           const pmJob = sortedJobs.find(j => 
               j.title.includes('Project Manager') || 
               j.title.includes('專案經理') || 
@@ -65,7 +60,6 @@ const ImportModal: React.FC<ImportModalProps> = ({ onClose, onImport, onUpdate, 
       loadJobs();
   }, []);
 
-  // --- GLOBAL PASTE LISTENER (Ctrl+V) ---
   useEffect(() => {
     const handleWindowPaste = (e: ClipboardEvent) => {
         if (e.clipboardData && e.clipboardData.files.length > 0) {
@@ -162,7 +156,7 @@ const ImportModal: React.FC<ImportModalProps> = ({ onClose, onImport, onUpdate, 
 
     setIsAnalyzing(true);
     setError(null);
-    setStatusText(`Parsing PDF & Searching LinkedIn...`);
+    setStatusText(`Identifying format (104/LinkedIn/Teamdoor)...`);
 
     try {
       const reader = new FileReader();
@@ -180,10 +174,7 @@ const ImportModal: React.FC<ImportModalProps> = ({ onClose, onImport, onUpdate, 
           setIsAnalyzing(false);
 
           // DUPLICATE CHECK
-          // Match by Name AND Email to be safe
-          const extractedName = analysis.extractedData.name;
           const extractedEmail = analysis.extractedData.email;
-          
           if (extractedEmail && extractedEmail !== 'Unknown') {
               const match = existingCandidates.find(c => 
                   c.email.toLowerCase() === extractedEmail.toLowerCase() &&
@@ -204,12 +195,11 @@ const ImportModal: React.FC<ImportModalProps> = ({ onClose, onImport, onUpdate, 
     }
   };
 
-  const handleFinalSave = () => {
+  const handleFinalSave = async () => {
       if (!analysisResult || !file) return;
+      setIsSaving(true); 
 
       const selectedJob = availableJobs.find(j => j.id === selectedJobId);
-      
-      // Sync LinkedIn
       analysisResult.extractedData.linkedinUrl = linkedInUrl;
       
       const extractedName = analysisResult.extractedData.name !== 'Unknown' ? analysisResult.extractedData.name : file.name.split('.')[0];
@@ -223,17 +213,15 @@ const ImportModal: React.FC<ImportModalProps> = ({ onClose, onImport, onUpdate, 
          finalSource = `Uploaded by ${userName}`;
       }
 
-      // HANDLE DUPLICATE UPDATE (Versioning)
+      await new Promise(resolve => setTimeout(resolve, 500));
+
       if (duplicateCandidate && onUpdate) {
-          // Create History Entry from OLD data
           const historyEntry = {
               date: duplicateCandidate.updatedAt,
               roleApplied: duplicateCandidate.roleApplied,
-              analysis: duplicateCandidate.analysis || analysisResult // fallback
+              analysis: duplicateCandidate.analysis || analysisResult
           };
-
           const newVersions = [...(duplicateCandidate.versions || []), historyEntry];
-
           const updatedCandidate: Candidate = {
               ...duplicateCandidate,
               roleApplied: selectedJob?.title || duplicateCandidate.roleApplied,
@@ -246,10 +234,8 @@ const ImportModal: React.FC<ImportModalProps> = ({ onClose, onImport, onUpdate, 
               uploadedBy: currentUser.email,
               isUnsolicited: isUnsolicited 
           };
-
           onUpdate(updatedCandidate);
       } else {
-          // CREATE NEW
           const newCandidate: Candidate = {
             id: crypto.randomUUID(),
             name: extractedName,
@@ -269,11 +255,10 @@ const ImportModal: React.FC<ImportModalProps> = ({ onClose, onImport, onUpdate, 
           };
           onImport(newCandidate);
       }
-
+      setIsSaving(false);
       onClose();
   };
 
-  // Helper to normalize score for preview
   const getNormalizedScore = (score: number) => score > 10 ? score / 10 : score;
 
   return (
@@ -284,7 +269,7 @@ const ImportModal: React.FC<ImportModalProps> = ({ onClose, onImport, onUpdate, 
             <Upload className="w-5 h-5" /> 
             {duplicateCandidate ? 'Duplicate Detected - Version Control' : (analysisResult ? 'Review & Confirm' : t('importAnalyze'))}
           </h2>
-          <button onClick={onClose} disabled={isAnalyzing} className="hover:text-slate-300">
+          <button onClick={onClose} disabled={isAnalyzing || isSaving} className="hover:text-slate-300">
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -296,7 +281,6 @@ const ImportModal: React.FC<ImportModalProps> = ({ onClose, onImport, onUpdate, 
             </div>
           )}
 
-          {/* PHASE 1: UPLOAD */}
           {!analysisResult ? (
               <div className="space-y-6">
                 <div className="bg-white p-4 rounded-lg border border-slate-200">
@@ -316,15 +300,10 @@ const ImportModal: React.FC<ImportModalProps> = ({ onClose, onImport, onUpdate, 
                         </select>
                         <ChevronDown className="absolute right-3 top-3.5 w-4 h-4 text-slate-400 pointer-events-none" />
                     </div>
-                    {availableJobs.length > 0 && availableJobs.find(j => j.id === selectedJobId)?.priority === 1 && (
-                        <div className="mt-1 text-[10px] text-emerald-600 font-bold flex items-center gap-1">
-                            <Star className="w-3 h-3 fill-emerald-600" /> High Priority Role
-                        </div>
-                    )}
                 </div>
 
                 <div className="flex gap-4 items-stretch h-56">
-                    <div className="flex-1 border-2 border-dashed border-slate-300 rounded-xl bg-white relative flex flex-col justify-center items-center group overflow-hidden transition-all hover:border-blue-400">
+                    <div className="flex-1 border-2 border-dashed border-slate-300 rounded-xl bg-white relative flex flex-col justify-center items-center group overflow-hidden transition-all hover:border-blue-400 hover:bg-blue-50/10">
                         <input type="file" id="resume-upload" className="hidden" accept="application/pdf" onChange={handleFileChange} />
                         
                         {file ? (
@@ -360,12 +339,19 @@ const ImportModal: React.FC<ImportModalProps> = ({ onClose, onImport, onUpdate, 
                                 )}
                             </div>
                         ) : (
-                            <label htmlFor="resume-upload" className="cursor-pointer flex flex-col items-center gap-2 w-full h-full justify-center py-4 hover:bg-slate-50 transition-colors">
-                                <div className="bg-slate-100 p-4 rounded-full">
+                            <label htmlFor="resume-upload" className="cursor-pointer flex flex-col items-center gap-2 w-full h-full justify-center py-4 transition-colors">
+                                <div className="bg-slate-100 p-4 rounded-full group-hover:bg-blue-100 transition-colors">
                                     <Upload className="w-6 h-6 text-slate-400 group-hover:text-blue-500 transition-colors" />
                                 </div>
-                                <span className="text-xs font-medium text-slate-700 truncate max-w-[150px]">{t('uploadText')}</span>
-                                <span className="text-[10px] text-slate-400">{t('supportedFormat')}</span>
+                                <span className="text-xs font-bold text-slate-700 truncate max-w-[150px]">{t('uploadText')}</span>
+                                <div className="flex gap-2 mt-2 opacity-60 grayscale group-hover:grayscale-0 transition-all">
+                                    <img src="https://www.104.com.tw/favicon.ico" className="w-4 h-4" title="104 Corp"/>
+                                    <Linkedin className="w-4 h-4 text-[#0a66c2]" />
+                                    <span title="Teamdoor">
+                                      <Briefcase className="w-4 h-4 text-[#00b0ff]" />
+                                    </span>
+                                </div>
+                                <span className="text-[10px] text-slate-400 mt-1">Supports: 104, LinkedIn, Teamdoor, CakeResume</span>
                             </label>
                         )}
                     </div>
@@ -498,6 +484,9 @@ const ImportModal: React.FC<ImportModalProps> = ({ onClose, onImport, onUpdate, 
                                    <div>
                                        <div className="font-bold text-slate-900">{analysisResult.extractedData.name}</div>
                                        <div className="text-xs text-blue-600 font-bold">{availableJobs.find(j => j.id === selectedJobId)?.title}</div>
+                                       <div className="text-[10px] text-slate-400 mt-0.5 flex items-center gap-1">
+                                           Detected from: <span className="font-bold text-slate-600">{analysisResult.extractedData.detectedSource}</span>
+                                       </div>
                                    </div>
                                </div>
 
@@ -545,24 +534,32 @@ const ImportModal: React.FC<ImportModalProps> = ({ onClose, onImport, onUpdate, 
                   
                   {/* ACTIONS */}
                   <div className="flex gap-3 pt-2">
-                      <button onClick={() => { setAnalysisResult(null); setDuplicateCandidate(null); }} className="px-6 py-3 border border-slate-300 rounded-lg text-slate-700 text-sm font-bold hover:bg-slate-50 transition-colors">
+                      <button onClick={() => { setAnalysisResult(null); setDuplicateCandidate(null); }} disabled={isSaving} className="px-6 py-3 border border-slate-300 rounded-lg text-slate-700 text-sm font-bold hover:bg-slate-50 transition-colors">
                           Back
                       </button>
                       <button 
                         onClick={handleFinalSave} 
-                        className={`flex-1 px-4 py-3 rounded-lg text-white text-sm font-bold shadow-lg flex items-center justify-center gap-2 transform hover:translate-y-[-1px] transition-all
-                            ${duplicateCandidate ? 'bg-amber-600 hover:bg-amber-700' : 'bg-slate-900 hover:bg-slate-800'}`}
+                        disabled={isSaving}
+                        className={`flex-1 px-4 py-3 rounded-lg text-white text-sm font-bold shadow-lg flex items-center justify-center gap-2 transform transition-all
+                            ${isSaving ? 'bg-slate-400 scale-95 cursor-wait' : (duplicateCandidate ? 'bg-amber-600 hover:bg-amber-700 hover:translate-y-[-1px]' : 'bg-slate-900 hover:bg-slate-800 hover:translate-y-[-1px]')}`}
                       >
-                          {duplicateCandidate ? (
+                          {isSaving ? (
                               <>
-                                <History className="w-4 h-4" />
-                                Update & Archive Old Version
+                                <Loader2 className="w-4 h-4 animate-spin" />
+                                Saving...
                               </>
                           ) : (
-                              <>
-                                <CheckCircle className="w-4 h-4" /> 
-                                Confirm & Save
-                              </>
+                              duplicateCandidate ? (
+                                  <>
+                                    <History className="w-4 h-4" />
+                                    Update & Archive Old Version
+                                  </>
+                              ) : (
+                                  <>
+                                    <CheckCircle className="w-4 h-4" /> 
+                                    Confirm & Save
+                                  </>
+                              )
                           )}
                       </button>
                   </div>
